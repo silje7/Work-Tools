@@ -1,0 +1,42 @@
+function mergeDuplicates() {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var data = sheet.getDataRange().getValues();
+  var mergedData = {};
+  var headers = data[0];
+
+  // Initialize mergedData with empty arrays
+  data.forEach(function (row, index) {
+    if (index === 0) return; // Skip header row
+    var key = row[0]; // Assuming duplicates are based on the first column
+    if (!mergedData[key]) {
+      mergedData[key] = new Array(headers.length).fill('');
+    }
+  });
+
+  // Loop through all rows and merge data based on the first column
+  data.forEach(function (row, index) {
+    if (index === 0) return; // Skip header row
+    var key = row[0];
+    row.forEach(function (cell, columnIndex) {
+      if (cell && columnIndex > 0) { // Skip the first column when merging
+        if (mergedData[key][columnIndex]) {
+          mergedData[key][columnIndex] += '|' + cell;
+        } else {
+          mergedData[key][columnIndex] = cell;
+        }
+      } else if (columnIndex === 0) {
+        mergedData[key][columnIndex] = cell; // Always keep the first column
+      }
+    });
+  });
+
+  // Convert merged data back to a 2D array
+  var mergedArray = [headers];
+  for (var key in mergedData) {
+    mergedArray.push(mergedData[key]);
+  }
+
+  // Create a new sheet and write the merged data
+  var newSheet = SpreadsheetApp.getActiveSpreadsheet().insertSheet('Merged Data');
+  newSheet.getRange(1, 1, mergedArray.length, headers.length).setValues(mergedArray);
+}

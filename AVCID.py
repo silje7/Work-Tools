@@ -18,9 +18,9 @@ def main():
     ]
 
 
-    site_search_files = [r'\\MYWEB02.verizon.com\GPNOC$\Production\GPNOC\phonebook\DB_G-sort.csv']
+    site_search_files = [r'\\MYWEB02.verizon.com\TestTeam$\Production\TestTeam\phonebook\DB_G-sort.csv']
     appdata = os.path.expandvars(r"%APPDATA%")
-    default_phonebook_file = r"\\MYWEB02.verizon.com\GPNOC$\Production\GPNOC\phonebook\contacts.txt"
+    default_phonebook_file = r"\\MYWEB02.verizon.com\TestTeam$\Production\TestTeam\phonebook\contacts.txt"
     last_phonebook_file = os.path.join(appdata, r"NMC_AIO\phonebook.csv")
     last_site_search_file= os.path.join(appdata, r"NMC_AIO\sitesearch.csv")
     log_file = os.path.join(appdata, r"Avaya\one-X Agent\2.5\Log Files\OneXAgent.log")

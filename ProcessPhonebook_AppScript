@@ -11,11 +11,10 @@ function processPhonebook() {
   var statisticsSheet = sheet.getSheetByName('Statistics');
   var errorsSheet = sheet.getSheetByName('Errors') || sheet.insertSheet('Errors');
   
-  // Clear sheets and set headers without overwriting headers in Row 1
-  clearAndSetHeaders(formattedSheet, ['Name', 'Company', 'Phone Number', 'Email']);
+  clearAndSetHeaders(formattedSheet, ['Name', 'Company', 'Phone Number', 'Email', 'Notes']);
   clearAndSetHeaders(unformattedSheet, ['Unformatted Data']);
   clearAndSetHeaders(statisticsSheet, ['Statistic', 'Value']);
-  clearAndSetHeaders(errorsSheet, ['Name', 'Company', 'Phone Number', 'Email']);
+  clearAndSetHeaders(errorsSheet, ['Name', 'Company', 'Phone Number', 'Email', 'Notes']);
 
   var formattedData = [];
   var unformattedData = [];
@@ -24,7 +23,7 @@ function processPhonebook() {
   var entryPattern = /^(.+)\s+w\/(.+)\s+([0-9\-\+\(\) ]+)\s+(.+)$/;
   
   lines.slice(1).forEach(function(line) {
-    var patternToUse = entryPattern.test(line) ? entryPattern : entryPattern; // Adjusted for clarity
+    var patternToUse = entryPattern.test(line) ? entryPattern : entryPattern;
     if (patternToUse.test(line)) {
       var matches = line.match(patternToUse);
       var name = matches[1].trim();
@@ -39,9 +38,9 @@ function processPhonebook() {
       }
 
       if (!name || !company || !phone || !email) {
-        errorsData.push([name, company, phone, email]);
+        errorsData.push([name, company, phone, email, ""]); // Added empty string for notes
       } else {
-        formattedData.push([name, company, phone, email]);
+        formattedData.push([name, company, phone, email, ""]); // Added empty string for notes
         if (companyCount[company]) {
           companyCount[company]++;
         } else {
@@ -53,57 +52,13 @@ function processPhonebook() {
     }
   });
 
-  // Populate sheets with data
   populateSheetWithData(formattedSheet, formattedData, 2);
   populateSheetWithData(unformattedSheet, unformattedData, 2);
   populateSheetWithData(errorsSheet, errorsData, 2);
 
-  // Add Statistics
   addStatistics(statisticsSheet, lines, formattedData, unformattedData, companyCount);
 
-  // Sort the formattedSheet by Name (Column A) after populating it
   formattedSheet.getRange(2, 1, formattedSheet.getLastRow() - 1, formattedSheet.getLastColumn()).sort(1);
 
   Logger.log('Script Done.');
-}
-
-function clearAndSetHeaders(sheet, headers) {
-  var lastRow = sheet.getLastRow();
-  if (lastRow > 1) {
-    sheet.deleteRows(2, lastRow - 1);
-  }
-  var currentHeaders = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
-  var isSameHeader = currentHeaders.every((value, index) => value === headers[index]);
-  if (!isSameHeader || lastRow === 1) {
-    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
-  }
-}
-
-function populateSheetWithData(sheet, data, startRow) {
-  if (data.length > 0) {
-    sheet.getRange(startRow, 1, data.length, data[0].length).setValues(data);
-  }
-}
-
-function addStatistics(statisticsSheet, lines, formattedData, unformattedData, companyCount) {
-  var errorsData = []; // Ensure errorsData is defined for statistics calculation
-  var stats = [
-    ['Total Entries', lines.length - 1],
-    ['Formatted Entries', formattedData.length],
-    ['Unformatted Entries', unformattedData.length],
-    ['Entries with Errors', errorsData.length]
-  ];
-  statisticsSheet.getRange(2, 1, stats.length, 2).setValues(stats);
-
-  var companyStats = Object.keys(companyCount).map(function(key) {
-    return [key, companyCount[key]];
-  }).sort(function(a, b) {
-    return b[1] - a[1];
-  });
-
-  var top10CompanyStats = companyStats.slice(0, 10);
-  var startRowForTop10 = stats.length + 4;
-  statisticsSheet.getRange(startRowForTop10, 1, top10CompanyStats.length, 2).setValues(top10CompanyStats.map(function(item, index) {
-    return [`#${index + 1} ${item[0]}`, item[1]];
-  }));
 }

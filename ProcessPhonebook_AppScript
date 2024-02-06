@@ -11,7 +11,7 @@ function processPhonebook() {
   var statisticsSheet = sheet.getSheetByName('Statistics');
   var errorsSheet = sheet.getSheetByName('Errors') || sheet.insertSheet('Errors');
   
-  // Clear sheets and set headers
+  // Clear sheets and set headers without overwriting headers in Row 1
   clearAndSetHeaders(formattedSheet, ['Name', 'Company', 'Phone Number', 'Email']);
   clearAndSetHeaders(unformattedSheet, ['Unformatted Data']);
   clearAndSetHeaders(statisticsSheet, ['Statistic', 'Value']);
@@ -21,11 +21,10 @@ function processPhonebook() {
   var unformattedData = [];
   var errorsData = [];
   var companyCount = {};
-  var entryPattern = /^(.+)\s+w\/(.+)\s+([0-9\-\+\(\) ]+)\s+(.+)$/; // Original regex
-  var extendedEntryPattern = /^(.+)\s+w\/(.+)\s+([0-9\-\+\(\) ]+)\s+(.+)$/; // Placeholder for extended regex
-
+  var entryPattern = /^(.+)\s+w\/(.+)\s+([0-9\-\+\(\) ]+)\s+(.+)$/;
+  
   lines.slice(1).forEach(function(line) {
-    var patternToUse = entryPattern.test(line) ? entryPattern : extendedEntryPattern;
+    var patternToUse = entryPattern.test(line) ? entryPattern : entryPattern; // Adjusted for clarity
     if (patternToUse.test(line)) {
       var matches = line.match(patternToUse);
       var name = matches[1].trim();
@@ -33,7 +32,6 @@ function processPhonebook() {
       var phone = matches[3].trim();
       var email = matches[4].trim();
 
-      // Handling for '+' in company name
       var plusIndex = company.indexOf('+');
       if (plusIndex !== -1) {
         phone = company.substring(plusIndex) + " " + phone;
@@ -42,7 +40,6 @@ function processPhonebook() {
 
       if (!name || !company || !phone || !email) {
         errorsData.push([name, company, phone, email]);
-        formattedData.push([name, company, phone, email]); // Optionally add to main phonebook
       } else {
         formattedData.push([name, company, phone, email]);
         if (companyCount[company]) {
@@ -56,7 +53,7 @@ function processPhonebook() {
     }
   });
 
-  // Populate sheets
+  // Populate sheets with data
   populateSheetWithData(formattedSheet, formattedData, 2);
   populateSheetWithData(unformattedSheet, unformattedData, 2);
   populateSheetWithData(errorsSheet, errorsData, 2);
@@ -64,12 +61,22 @@ function processPhonebook() {
   // Add Statistics
   addStatistics(statisticsSheet, lines, formattedData, unformattedData, companyCount);
 
+  // Sort the formattedSheet by Name (Column A) after populating it
+  formattedSheet.getRange(2, 1, formattedSheet.getLastRow() - 1, formattedSheet.getLastColumn()).sort(1);
+
   Logger.log('Script Done.');
 }
 
 function clearAndSetHeaders(sheet, headers) {
-  sheet.clearContents();
-  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  var lastRow = sheet.getLastRow();
+  if (lastRow > 1) {
+    sheet.deleteRows(2, lastRow - 1);
+  }
+  var currentHeaders = sheet.getRange(1, 1, 1, headers.length).getValues()[0];
+  var isSameHeader = currentHeaders.every((value, index) => value === headers[index]);
+  if (!isSameHeader || lastRow === 1) {
+    sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
+  }
 }
 
 function populateSheetWithData(sheet, data, startRow) {
@@ -79,6 +86,7 @@ function populateSheetWithData(sheet, data, startRow) {
 }
 
 function addStatistics(statisticsSheet, lines, formattedData, unformattedData, companyCount) {
+  var errorsData = []; // Ensure errorsData is defined for statistics calculation
   var stats = [
     ['Total Entries', lines.length - 1],
     ['Formatted Entries', formattedData.length],
@@ -93,9 +101,8 @@ function addStatistics(statisticsSheet, lines, formattedData, unformattedData, c
     return b[1] - a[1];
   });
 
-  // If more than 10, slice to get top 10
   var top10CompanyStats = companyStats.slice(0, 10);
-  var startRowForTop10 = stats.length + 4; // Adjust starting row for the top 10 companies stats
+  var startRowForTop10 = stats.length + 4;
   statisticsSheet.getRange(startRowForTop10, 1, top10CompanyStats.length, 2).setValues(top10CompanyStats.map(function(item, index) {
     return [`#${index + 1} ${item[0]}`, item[1]];
   }));

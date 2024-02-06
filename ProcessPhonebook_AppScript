@@ -7,38 +7,43 @@ function processPhonebook() {
 
   var sheet = SpreadsheetApp.openById('1sQLj73TD24iHIQFUQNup6OqL5h7VRDwWg9mXG1o-57k');
   var formattedSheet = sheet.getSheetByName('Formatted Entries');
-  // Do not clear the formattedSheet to preserve the header
-  
   var unformattedSheet = sheet.getSheetByName('Unformatted Entries');
-  unformattedSheet.clearContents(); // Assuming it's safe to clear these
-
   var statisticsSheet = sheet.getSheetByName('Statistics');
-  statisticsSheet.clearContents(); // Clear for new statistics
+  var errorsSheet = sheet.getSheetByName('Errors') || sheet.insertSheet('Errors');
   
-  var existingEntries = getExistingEntries(formattedSheet); // Function to get existing entries for duplication check
-  
+  // Clear sheets and set headers
+  clearAndSetHeaders(formattedSheet, ['Name', 'Company', 'Phone Number', 'Email']);
+  clearAndSetHeaders(unformattedSheet, ['Unformatted Data']);
+  clearAndSetHeaders(statisticsSheet, ['Statistic', 'Value']);
+  clearAndSetHeaders(errorsSheet, ['Name', 'Company', 'Phone Number', 'Email']);
+
   var formattedData = [];
   var unformattedData = [];
+  var errorsData = [];
   var companyCount = {};
-  var entryPattern = /^(.+)\s+w\/(.+)\s+([0-9\-\+\(\) ]+)\s+(.+)$/;
-  
-  lines.slice(1).forEach(function(line) { // Start from line 1 to skip document header
-    if (entryPattern.test(line)) {
-      var matches = line.match(entryPattern);
+  var entryPattern = /^(.+)\s+w\/(.+)\s+([0-9\-\+\(\) ]+)\s+(.+)$/; // Original regex
+  var extendedEntryPattern = /^(.+)\s+w\/(.+)\s+([0-9\-\+\(\) ]+)\s+(.+)$/; // Placeholder for extended regex
+
+  lines.slice(1).forEach(function(line) {
+    var patternToUse = entryPattern.test(line) ? entryPattern : extendedEntryPattern;
+    if (patternToUse.test(line)) {
+      var matches = line.match(patternToUse);
       var name = matches[1].trim();
       var company = matches[2].trim();
       var phone = matches[3].trim();
       var email = matches[4].trim();
 
-      // Handling '+' within company name
+      // Handling for '+' in company name
       var plusIndex = company.indexOf('+');
       if (plusIndex !== -1) {
         phone = company.substring(plusIndex) + " " + phone;
         company = company.substring(0, plusIndex).trim();
       }
 
-      var entryKey = name + "|" + phone; // Key to check duplicates
-      if (!existingEntries.has(entryKey)) { // Avoid duplicates
+      if (!name || !company || !phone || !email) {
+        errorsData.push([name, company, phone, email]);
+        formattedData.push([name, company, phone, email]); // Optionally add to main phonebook
+      } else {
         formattedData.push([name, company, phone, email]);
         if (companyCount[company]) {
           companyCount[company]++;
@@ -51,40 +56,47 @@ function processPhonebook() {
     }
   });
 
-  // Append new data to "Formatted Entries"
-  appendData(formattedSheet, formattedData);
-  
-  // Populate "Unformatted Entries"
-  if (unformattedData.length > 0) {
-    unformattedSheet.getRange(2, 1, unformattedData.length, 1).setValues(unformattedData);
-  }
+  // Populate sheets
+  populateSheetWithData(formattedSheet, formattedData, 2);
+  populateSheetWithData(unformattedSheet, unformattedData, 2);
+  populateSheetWithData(errorsSheet, errorsData, 2);
 
-  // Update statistics
-  updateStatistics(statisticsSheet, lines, formattedData, unformattedData, companyCount);
+  // Add Statistics
+  addStatistics(statisticsSheet, lines, formattedData, unformattedData, companyCount);
 
   Logger.log('Script Done.');
 }
 
-function getExistingEntries(sheet) {
-  var entries = new Set();
-  var data = sheet.getDataRange().getValues();
-  for (var i = 1; i < data.length; i++) {
-    var name = data[i][0].trim();
-    var phone = data[i][2].trim();
-    entries.add(name + "|" + phone);
-  }
-  return entries;
+function clearAndSetHeaders(sheet, headers) {
+  sheet.clearContents();
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]);
 }
 
-function appendData(sheet, data) {
+function populateSheetWithData(sheet, data, startRow) {
   if (data.length > 0) {
-    var startRow = sheet.getLastRow() + 1;
-    var range = sheet.getRange(startRow, 1, data.length, 4);
-    range.setValues(data);
+    sheet.getRange(startRow, 1, data.length, data[0].length).setValues(data);
   }
 }
 
-function updateStatistics(sheet, lines, formattedData, unformattedData, companyCount) {
-  // Implement the statistics update logic here
-  // This function should populate the "Statistics" sheet with the calculated statistics
+function addStatistics(statisticsSheet, lines, formattedData, unformattedData, companyCount) {
+  var stats = [
+    ['Total Entries', lines.length - 1],
+    ['Formatted Entries', formattedData.length],
+    ['Unformatted Entries', unformattedData.length],
+    ['Entries with Errors', errorsData.length]
+  ];
+  statisticsSheet.getRange(2, 1, stats.length, 2).setValues(stats);
+
+  var companyStats = Object.keys(companyCount).map(function(key) {
+    return [key, companyCount[key]];
+  }).sort(function(a, b) {
+    return b[1] - a[1];
+  });
+
+  // If more than 10, slice to get top 10
+  var top10CompanyStats = companyStats.slice(0, 10);
+  var startRowForTop10 = stats.length + 4; // Adjust starting row for the top 10 companies stats
+  statisticsSheet.getRange(startRowForTop10, 1, top10CompanyStats.length, 2).setValues(top10CompanyStats.map(function(item, index) {
+    return [`#${index + 1} ${item[0]}`, item[1]];
+  }));
 }

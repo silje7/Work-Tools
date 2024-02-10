@@ -1,57 +1,87 @@
-
-function doGet(e) {
-  return HtmlService.createHtmlOutputFromFile('Index');
+function doGet() {
+  Logger.log("Serving the web app page");
+  return HtmlService.createHtmlOutputFromFile('Index')
+    .setTitle('Contact List Search')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
 function getContacts(searchQuery) {
-  const ss = SpreadsheetApp.openByUrl('https://docs.google.com/spreadsheets/d/e/2PACX-1vTMqS9jfJnH7RLc8zeNJ56-9XgxfOHGarVQE_46u1SlMUJm2NGXGeF9vZO58uDVRp26ZH__p9zqM9UG/pubhtml');
-  const sheet = ss.getSheetByName('Formatted Entries'); // Ensure this matches your sheet name
-  let data = sheet.getDataRange().getValues();
+  Logger.log("Fetching contacts. Search query: " + searchQuery);
+  var ss = SpreadsheetApp.openById('YOUR_SPREADSHEET_ID');
+  var sheet = ss.getSheetByName('Formatted Entries'); // Adjust if your sheet name is different
+  var data = sheet.getDataRange().getValues();
+  Logger.log("Total rows fetched from sheet: " + data.length);
+
   if (searchQuery) {
-    data = data.filter(row => row.join().toLowerCase().includes(searchQuery.toLowerCase()));
+    // Filter data based on the search query. Adjust column indexes as needed for your data structure
+    data = data.filter(row => row[0].toString().toLowerCase().includes(searchQuery.toLowerCase()));
+    Logger.log("Rows after filter: " + data.length);
   }
-  return data;
+
+  // Skip headers and log actual data rows being returned
+  var rowData = data.slice(1);
+  Logger.log("Returning rows to web app: " + rowData.length);
+  return rowData;
 }
+
+
 
 
 <!DOCTYPE html>
 <html>
   <head>
-    <title>Searchable Contact List</title>
+    <title>Contact List</title>
+    <style>
+      table, th, td {
+        border: 1px solid black;
+        border-collapse: collapse;
+      }
+      th, td {
+        padding: 10px;
+      }
+      th {
+        background-color: #f2f2f2;
+      }
+    </style>
   </head>
   <body>
-    Search: <input type="text" id="searchInput" onkeyup="searchContacts()" placeholder="Type to search...">
-    <div id="tableContainer"></div>
+    <input type="text" id="searchInput" onkeyup="searchContacts()" placeholder="Search by name...">
+    <p>Total entries: <span id="totalEntries">0</span></p>
+    <table id="contactsTable">
+      <tr>
+        <th>Name</th>
+        <th>Company</th>
+        <th>Phone Number</th>
+        <th>Email</th>
+      </tr>
+    </table>
 
     <script>
       function searchContacts() {
-        const searchQuery = document.getElementById('searchInput').value;
-        google.script.run.withSuccessHandler(function(data) {
-          // Function to dynamically build the table with data
-          buildTable(data);
-        }).getContacts(searchQuery);
+        var searchQuery = document.getElementById('searchInput').value;
+        google.script.run.withSuccessHandler(updateTable).getContacts(searchQuery);
       }
 
-      function buildTable(data) {
-        let tableHTML = "<table border='1'>";
-        // Assuming the first row is headers
-        tableHTML += "<tr>";
-        data[0].forEach(header => tableHTML += "<th>" + header + "</th>");
-        tableHTML += "</tr>";
-        // Data rowshttps://docs.google.com/spreadsheets/d/e/2PACX-1vTMqS9jfJnH7RLc8zeNJ56-9XgxfOHGarVQE_46u1SlMUJm2NGXGeF9vZO58uDVRp26ZH__p9zqM9UG/pub?gid=0&single=true&output=csv
-          tableHTML += "<tr>";
-          data[i].forEach(cell => tableHTML += "<td>" + cell + "</td>");
-          tableHTML += "</tr>";
-        }
-        tableHTML += "</table>";
-        document.getElementById('tableContainer').innerHTML = tableHTML;
+      function updateTable(data) {
+        var table = document.getElementById('contactsTable');
+        var tbody = document.createElement('tbody');
+        data.forEach(function(row) {
+          var tr = document.createElement('tr');
+          row.forEach(function(cell) {
+            var td = document.createElement('td');
+            td.textContent = cell;
+            tr.appendChild(td);
+          });
+          tbody.appendChild(tr);
+        });
+        table.replaceChild(tbody, table.getElementsByTagName('tbody')[0] || null);
+        document.getElementById('totalEntries').textContent = data.length;
       }
 
       // Initial load
       document.addEventListener('DOMContentLoaded', function() {
-        searchContacts(); // Load all contacts initially
+        searchContacts(); // Load all data initially
       });
     </script>
   </body>
 </html>
-

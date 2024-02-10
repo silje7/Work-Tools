@@ -1,0 +1,85 @@
+function doGet() {
+  return HtmlService.createHtmlOutputFromFile('Index');
+}
+
+function getContacts() {
+  // Adjust this ID to your spreadsheet's ID
+  var ss = SpreadsheetApp.openByUrl('https://docs.google.com/spreadsheets/d/e/2PACX-1vTMqS9jfJnH7RLc8zeNJ56-9XgxfOHGarVQE_46u1SlMUJm2NGXGeF9vZO58uDVRp26ZH__p9zqM9UG/pubhtml');
+  var sheet = ss.getSheetByName('Formatted Entries'); // Ensure this matches your sheet name
+  var data = sheet.getDataRange().getValues();
+  return data;
+}
+
+
+
+
+
+
+
+
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Contact List</title>
+    <style>
+        input[type="text"] {
+            width: 240px;
+            margin-bottom: 10px;
+        }
+        table, th, td {
+            border: 1px solid black;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 5px;
+            text-align: left;
+        }
+    </style>
+</head>
+<body>
+    <input type="text" id="searchBox" onkeyup="filterContacts()" placeholder="Search for names...">
+    <table id="contactsTable">
+        <tr>
+            <th>Name</th>
+            <th>Company</th>
+            <th>Phone Number</th>
+            <th>Email</th>
+        </tr>
+    </table>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            google.script.run.withSuccessHandler(buildTable).getContacts();
+        });
+
+        function buildTable(data) {
+            var table = document.getElementById('contactsTable');
+            for (var i = 1; i < data.length; i++) {
+                var row = `<tr><td>${data[i][0]}</td><td>${data[i][1]}</td><td>${data[i][2]}</td><td>${data[i][3]}</td></tr>`;
+                table.innerHTML += row;
+            }
+        }
+
+        function filterContacts() {
+            var input, filter, table, tr, td, i, txtValue;
+            input = document.getElementById("searchBox");
+            filter = input.value.toUpperCase();
+            table = document.getElementById("contactsTable");
+            tr = table.getElementsByTagName("tr");
+            for (i = 0; i < tr.length; i++) {
+                td = tr[i].getElementsByTagName("td")[0];
+                if (td) {
+                    txtValue = td.textContent || td.innerText;
+                    if (txtValue.toUpperCase().indexOf(filter) > -1) {
+                        tr[i].style.display = "";
+                    } else {
+                        tr[i].style.display = "none";
+                    }
+                }       
+            }
+        }
+    </script>
+</body>
+</html>
+

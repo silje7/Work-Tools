@@ -44,7 +44,7 @@ function getContacts(searchQuery) {
       }
     </style>
   </head>
-  <body>
+  <body>https://docs.google.com/spreadsheets/d/e/2PACX-1vTMqS9jfJnH7RLc8zeNJ56-9XgxfOHGarVQE_46u1SlMUJm2NGXGeF9vZO58uDVRp26ZH__p9zqM9UG/pubhtml
     <input type="text" id="searchInput" onkeyup="searchContacts()" placeholder="Search by name...">
     <p>Total entries: <span id="totalEntries">0</span></p>
     <table id="contactsTable">

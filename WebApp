@@ -1,87 +1,113 @@
-function doGet() {
-  Logger.log("Serving the web app page");
-  return HtmlService.createHtmlOutputFromFile('Index')
-    .setTitle('Contact List Search')
-    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
-}
-
-function getContacts(searchQuery) {
-  Logger.log("Fetching contacts. Search query: " + searchQuery);
-  var ss = SpreadsheetApp.openById('YOUR_SPREADSHEET_ID');
-  var sheet = ss.getSheetByName('Formatted Entries'); // Adjust if your sheet name is different
-  var data = sheet.getDataRange().getValues();
-  Logger.log("Total rows fetched from sheet: " + data.length);
-
-  if (searchQuery) {
-    // Filter data based on the search query. Adjust column indexes as needed for your data structure
-    data = data.filter(row => row[0].toString().toLowerCase().includes(searchQuery.toLowerCase()));
-    Logger.log("Rows after filter: " + data.length);
-  }
-
-  // Skip headers and log actual data rows being returned
-  var rowData = data.slice(1);
-  Logger.log("Returning rows to web app: " + rowData.length);
-  return rowData;
-}
-
-
-
-
 <!DOCTYPE html>
 <html>
-  <head>
+<head>
     <title>Contact List</title>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet">
     <style>
-      table, th, td {
-        border: 1px solid black;
-        border-collapse: collapse;
-      }
-      th, td {
-        padding: 10px;
-      }
-      th {
-        background-color: #f2f2f2;
-      }
+        body {
+            font-family: 'Roboto', sans-serif;
+            padding: 20px;
+            background-color: #f1f1f1;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            background-color: #fff;
+        }
+        th, td {
+            text-align: left;
+            padding: 8px;
+            border-bottom: 1px solid #ddd;
+            white-space: nowrap; /* Prevents wrapping */
+        }
+        th {
+            background-color: #f2f2f2;
+            cursor: pointer;
+        }
+        tr:hover {
+            background-color: #f5f5f5;
+        }
+        input[type="text"] {
+            padding: 10px;
+            margin-bottom: 20px;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            width: calc(100% - 22px); /* input sizing */
+        }
     </style>
-  </head>
-  <body>https://docs.google.com/spreadsheets/d/e/2PACX-1vTMqS9jfJnH7RLc8zeNJ56-9XgxfOHGarVQE_46u1SlMUJm2NGXGeF9vZO58uDVRp26ZH__p9zqM9UG/pubhtml
+</head>
+<body>
     <input type="text" id="searchInput" onkeyup="searchContacts()" placeholder="Search by name...">
-    <p>Total entries: <span id="totalEntries">0</span></p>
     <table id="contactsTable">
-      <tr>
-        <th>Name</th>
-        <th>Company</th>
-        <th>Phone Number</th>
-        <th>Email</th>
-      </tr>
+        <thead>
+            <tr>
+                <th onclick="sortTable(0)">Name</th>
+                <th onclick="sortTable(1)">Company</th>
+                <th onclick="sortTable(2)">Phone Number</th>
+                <th>Email</th>
+            </tr>
+        </thead>
+        <tbody>
+            <!-- Data rows will be inserted here -->
+        </tbody>
     </table>
 
     <script>
-      function searchContacts() {
-        var searchQuery = document.getElementById('searchInput').value;
-        google.script.run.withSuccessHandler(updateTable).getContacts(searchQuery);
-      }
+        function searchContacts() {
+            var searchQuery = document.getElementById('searchInput').value;
+            google.script.run.withSuccessHandler(updateTable).getContacts(searchQuery);
+        }
 
-      function updateTable(data) {
-        var table = document.getElementById('contactsTable');
-        var tbody = document.createElement('tbody');
-        data.forEach(function(row) {
-          var tr = document.createElement('tr');
-          row.forEach(function(cell) {
-            var td = document.createElement('td');
-            td.textContent = cell;
-            tr.appendChild(td);
-          });
-          tbody.appendChild(tr);
+        function updateTable(data) {
+            var tbody = document.getElementById('contactsTable').getElementsByTagName('tbody')[0];
+            tbody.innerHTML = ""; // Clear existing table rows
+            data.forEach(function(row) {
+                var tr = document.createElement('tr');
+                row.forEach(function(cell, index) {
+                    var td = document.createElement('td');
+                    if (index < 3) td.style.whiteSpace = 'nowrap'; // Prevent wrapping for the first three columns
+                    td.textContent = cell;
+                    tr.appendChild(td);
+                });
+                tbody.appendChild(tr);
+            });
+        }
+
+        // Sorting functionality for table headers
+        function sortTable(column) {
+            var table, rows, switching, i, x, y, shouldSwitch;
+            table = document.getElementById("contactsTable");
+            switching = true;
+            /* Make a loop that will continue until no switching has been done: */
+            while (switching) {
+                // Start by saying: no switching is done:
+                switching = false;
+                rows = table.getElementsByTagName("TR");
+                /* Loop through all table rows (except the first, which contains table headers): */
+                for (i = 1; i < (rows.length - 1); i++) {
+                    // Start by saying there should be no switching:
+                    shouldSwitch = false;
+                    /* Get the two elements you want to compare, one from current row and one from the next: */
+                    x = rows[i].getElementsByTagName("TD")[column];
+                    y = rows[i + 1].getElementsByTagName("TD")[column];
+                    // Check if the two rows should switch place:
+                    if (x.textContent.toLowerCase() > y.textContent.toLowerCase()) {
+                        // If so, mark as a switch and break the loop:
+                        shouldSwitch = true;
+                        break;
+                    }
+                }
+                if (shouldSwitch) {
+                    /* If a switch has been marked, make the switch and mark that a switch has been done: */
+                    rows[i].parentNode.insertBefore(rows[i + 1], rows[i]);
+                    switching = true;
+                }
+            }
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            searchContacts(''); // Load all data by default
         });
-        table.replaceChild(tbody, table.getElementsByTagName('tbody')[0] || null);
-        document.getElementById('totalEntries').textContent = data.length;
-      }
-
-      // Initial load
-      document.addEventListener('DOMContentLoaded', function() {
-        searchContacts(); // Load all data initially
-      });
     </script>
-  </body>
+</body>
 </html>

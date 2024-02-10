@@ -38,7 +38,7 @@ function getContacts(searchQuery) {
         tableHTML += "<tr>";
         data[0].forEach(header => tableHTML += "<th>" + header + "</th>");
         tableHTML += "</tr>";
-        // Data rows
+        // Data rowshttps://docs.google.com/spreadsheets/d/e/2PACX-1vTMqS9jfJnH7RLc8zeNJ56-9XgxfOHGarVQE_46u1SlMUJm2NGXGeF9vZO58uDVRp26ZH__p9zqM9UG/pub?output=csv
         for (let i = 1; i < data.length; i++) {
           tableHTML += "<tr>";
           data[i].forEach(cell => tableHTML += "<td>" + cell + "</td>");

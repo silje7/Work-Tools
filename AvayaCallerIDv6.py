@@ -305,36 +305,7 @@ def add_contacts_to_avaya_xml(app):
         tree = ET.ElementTree(root)
 
     contacts = [
-        ("CaryNMC-Power", "800-251-6517", "NMC-Support"),
-        ("CaryNMC-Transport", "800-873-7866", "NMC-Support"),
-        ("CaryNMC-Voice", "800-229-7427", "NMC-Support"),
-        ("CaryNMC-IP", "800-281-8396", "NMC-Support"),
-        ("Call Out of Country", "9011+CC+#", "NMC-Support"),
-        ("NTNOC", "888-684-6656", "NMC-Support"),
-        ("CSC (opt.3-1)", "888-696-3973", "NMC-Dispatch"),
-        ("OCC (opt.1)", "877-628-6672", "NMC-Dispatch"),
-        ("New England NDC (opt.6-2)", "855-468-6280", "NMC-Dispatch"),
-        ("Potomac NDC (opt.1-3)", "866-618-9822", "NMC-Dispatch"),
-        ("PA & DE NDC (opt.1-3)", "855-632-7551", "NMC-Dispatch"),
-        ("New Jersey NDC (opt.1-3)", "855-632-7552", "NMC-Dispatch"),
-        ("New York NDC (opt.1-3)", "855-632-7553", "NMC-Dispatch"),
-        ("New York NDC (NYC) (opt.1-3-1)", "855-632-7554", "NMC-Dispatch"),
-        ("Directory Assistance", "XXX-555-1212", "Utility"),
-        ("GENMC", "800-444-0902", "NMC-Support"),
-        ("NSNOC - PA", "888-479-8340", "NMC-Support"),
-        ("Adesta (G4S)", "888-637-2344", "NMC-External"),
-        ("Telemetry (TAM)", "800-487-0350", "NMC-Support"),
-        ("Level 3 (CenturyLink)", "303-260-4942", "NMC-External"),
-        ("Equinix", "866-378-4649", "NMC-External"),
-        ("Rapid Response", "800-932-3822", "NMC-External"),
-        ("NMS (GSPS)", "866-535-1481", "NMC-Support"),
-        ("Sprint (opt.3-1-1)", "866-400-6040", "NMC-External"),
-        ("AT&T", "866-400-6649", "NMC-External"),
-        ("Amtrak", "800-832-3116", "NMC-External"),
-        ("Zayo (opt.1-1)", "866-236-2824", "NMC-External"),
-        ("vRepair Helpdesk", "877-389-0900", "NMC-Support"),
-        ("FCC (NOTAMs)", "877-487-6867", "NMC-External"),
-        ("Verizon Wireless (VzW) NOC", "800-852-2671", "NMC-External"),
+        ("LASTNAME", "PHONENUMER", "FIRSTNAME"),
     ]
 
     contacts_group = root.find(f".//{{{ns}}}Group[@Name='My Contacts']")

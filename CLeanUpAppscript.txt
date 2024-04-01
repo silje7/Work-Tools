@@ -22,11 +22,33 @@ function logAndFlagEmails() {
     return;
   }
 
-  // Check for the "DELETE-ME" label, create it if it doesn't exist
-  let label = GmailApp.getUserLabels().find(l => l.getName() === "DELETE-ME");
-  if (!label) {
-    label = GmailApp.createLabel("DELETE-ME");
-  }
+    // Check for the "DELETE-ME" label, create it if it doesn't exist
+  // let label = GmailApp.getUserLabels().find(l => l.getName() === "DELETE-ME");
+  // if (!label) {
+  //   label = GmailApp.createLabel("DELETE-ME");
+  // }
+
+  ...
+
+  // Process each search query
+  searchQueries.forEach((query) => {
+    const threads = GmailApp.search(query);
+    threads.forEach((thread) => {
+      const messages = GmailApp.getMessagesForThread(thread);
+      messages.forEach((message) => {
+        if (message.getDate() < pastDate) { // Additional check
+          // Log the email details
+          console.log(`Flagged for deletion: ${message.getSubject()} from ${message.getFrom()}`);
+          emailLogs.push([new Date(), message.getSubject(), message.getFrom(), 'Flagged for Deletion']);
+          totalFlagged += 1;
+
+          // Add "DELETE-ME" label to the thread
+          // label.addToThread(thread); // This line is now commented out
+        }
+      });
+    });
+  });
+
 
   // Initialize the counter and log array
   let totalFlagged = 0;

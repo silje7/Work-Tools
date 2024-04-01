@@ -1,80 +1,50 @@
-function getTopSenders(daysBack) {
+function getTopSendersForLast30Days() {
   // Define the regular expression to extract email addresses
   let regEx = /(?<=\<)(.*?)(?=\>)/gm;
 
-  // Initialize the search query for Gmail
-  let searchQuery = '';
-  if (typeof daysBack === 'number') {
-    // Calculate the date 'daysBack' days ago from now
-    let startDate = new Date();
-    startDate.setDate(startDate.getDate() - daysBack);
-    console.log(`Fetching emails from the last ${daysBack} days, starting from:`, startDate.toISOString());
-    searchQuery = 'after:' + formatDateForGmail(startDate);
-  } else {
-    console.log('Fetching all available emails...');
-  }
+  // Calculate the date 30 days ago from now
+  let thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  console.log(`Fetching emails from the last 30 days, starting from:`, thirtyDaysAgo.toISOString());
+
+  // Prepare the search query for Gmail
+  let searchQuery = 'after:' + formatDateForGmail(thirtyDaysAgo);
+  console.log('Gmail search query:', searchQuery);
 
   // Fetch threads based on the search query
-  console.log('Gmail search query:', searchQuery);
-  let threads = searchQuery ? GmailApp.search(searchQuery) : GmailApp.getInboxThreads();
-
+  let threads = GmailApp.search(searchQuery);
   console.log(`Found ${threads.length} threads. Processing...`);
 
   // Object to hold sender email addresses and their corresponding counts
   let senderCounts = {};
 
-  threads.forEach((thread, index) => {
+  threads.forEach((thread) => {
     let messages = thread.getMessages();
     messages.forEach((message) => {
       let address = message.getFrom().match(regEx);
       if (address && address.length > 0) {
         let emailAddress = address[0];
-        if (!senderCounts[emailAddress]) {
-          senderCounts[emailAddress] = 1;
-        } else {
-          senderCounts[emailAddress]++;
-        }
+        senderCounts[emailAddress] = (senderCounts[emailAddress] || 0) + 1;
       }
     });
-
-    // Log progress for every 10 threads processed
-    if (index % 10 === 0) {
-      console.log(`Processed ${index + 1}/${threads.length} threads...`);
-    }
   });
 
   console.log('Compilation of senders and counts completed.');
 
-  // Convert the senderCounts object into an array of [email, count] arrays
-  let sortedSenders = Object.entries(senderCounts);
-
-  // Sort the array by count in descending order
-  sortedSenders.sort((a, b) => b[1] - a[1]);
+  // Convert the senderCounts object into an array and sort by count in descending order
+  let sortedSenders = Object.entries(senderCounts).sort((a, b) => b[1] - a[1]);
 
   // Logging the top senders for review
-  console.log('Top senders:', sortedSenders.slice(0, 10));
+  console.log('Top senders in the last 30 days:', sortedSenders.slice(0, 10));
 
-  // Return the sorted array of senders and their counts
+  // Optionally, return the sorted array of senders and their counts if needed elsewhere
   return sortedSenders;
 }
 
 function formatDateForGmail(date) {
   // Format a date object into YYYY/MM/DD format for Gmail search
-  return date.getFullYear() + '/' + (date.getMonth() + 1) + '/' + date.getDate();
+  return date.getFullYear() + '/' + (date.getMonth() + 1).toString().padStart(2, '0') + '/' + date.getDate().toString().padStart(2, '0');
 }
 
-// Example usage
-let topSendersRecent7Days = getTopSenders(7); // For the last 7 days
-console.log('Top senders in the last 7 days:', topSendersRecent7Days.slice(0, 5));
-
-let topSendersLast30Days = getTopSenders(30); // For the last 30 days
-console.log('Top senders in the last 30 days:', topSendersLast30Days.slice(0, 5));
-
-let topSendersLast60Days = getTopSenders(60); // For the last 60 days
-console.log('Top senders in the last 60 days:', topSendersLast60Days.slice(0, 5));
-
-let topSendersLast90Days = getTopSenders(90); // For the last 90 days
-console.log('Top senders in the last 90 days:', topSendersLast90Days.slice(0, 5));
-
-let topSendersAllTime = getTopSenders(); // For all time
-console.log('Top senders of all time:', topSendersAllTime.slice(0, 5));
+// Direct function call to get and log top senders for the last 30 days
+getTopSendersForLast30Days();

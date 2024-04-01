@@ -1,48 +1,64 @@
-function deleteSpecificEmailsAndArchiveOld() {
-  // Delete specific emails based on the updated criteria
-  var today = new Date();
-  var twoYearsAgo = new Date(today.setFullYear(today.getFullYear() - 2));
-  var searchQueryNpnoc = 'from:noreply@npnoc.verizon.com to:hourlybodreportexecview@verizon.com before:' + twoYearsAgo.toISOString().substring(0, 10) + ' has:attachment';
-  var searchQueryInsideVerizon = 'from:insideverizon@verizon.com before:' + twoYearsAgo.toISOString().substring(0, 10) + ' has:attachment';
-  
-  var emailsToDeleteNpnoc = GmailApp.search(searchQueryNpnoc);
-  var countNpnoc = processEmailsForDeletion(emailsToDeleteNpnoc);
-  
-  var emailsToDeleteInsideVerizon = GmailApp.search(searchQueryInsideVerizon);
-  var countInsideVerizon = processEmailsForDeletion(emailsToDeleteInsideVerizon);
-  
-  Logger.log(countNpnoc + countInsideVerizon + ' specific emails with attachments older than 2 years were deleted.');
-  
-  // Archive emails older than 365 days
-  archiveOldEmails();
-}
+function logAndFlagEmails() {
+  // Define the search criteria
+  const daysAgo = 10; // Customize this value as needed
+  const pastDate = new Date();
+  pastDate.setDate(pastDate.getDate() - daysAgo);
+  const formattedDate = Utilities.formatDate(pastDate, Session.getScriptTimeZone(), "yyyy/MM/dd");
+  const searchQueries = [
+    `(from:noreply@ OR from:*@test.com OR from:noreply@version.com) before:${formattedDate}`,
+    `from:x@verizon.com subject:TESTEMAIL before:${formattedDate}`
+  ];
 
-function processEmailsForDeletion(emails) {
-  var count = 0;
-  for (var i = 0; i < emails.length; i++) {
-    GmailApp.moveThreadToTrash(emails[i]);
-    count++;
-    logEmailsToSheet(emails[i]); // Assuming this function is already defined
+  // Spreadsheet setup
+  const spreadsheetId = 'YOUR_SPREADSHEET_ID'; // Replace with your actual Spreadsheet ID
+  const logSheetName = 'Sheet1'; // Logging sheet
+  const summarySheetName = 'Sheet2'; // Summary sheet
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetId);
+  const logSheet = spreadsheet.getSheetByName(logSheetName);
+  const summarySheet = spreadsheet.getSheetByName(summarySheetName);
+
+  if (!logSheet || !summarySheet) {
+    console.log('One or more specified sheets not found.');
+    return;
   }
-  return count;
-}
 
-function logEmailsToSheet(emailThread) {
-  var sheetId = 'YOUR_SHEET_ID'; // Make sure to replace YOUR_SHEET_ID with your actual Google Sheet ID
-  var sheet = SpreadsheetApp.openById(sheetId).getActiveSheet();
-  var subject = emailThread.getFirstMessageSubject();
-  var from = emailThread.getMessages()[0].getFrom();
-  var date = emailThread.getLastMessageDate();
-  
-  sheet.appendRow([new Date(), subject, from, date.toString()]);
-}
-
-function archiveOldEmails() {
-  const threads = GmailApp.search("in:inbox before:365d");
-  for (const thread of threads) {
-    thread.moveToArchive();
+  // Check for the "DELETE-ME" label, create it if it doesn't exist
+  let label = GmailApp.getUserLabels().find(l => l.getName() === "DELETE-ME");
+  if (!label) {
+    label = GmailApp.createLabel("DELETE-ME");
   }
-  Logger.log(threads.length + ' emails were archived.');
-}
 
-// Remember to replace 'YOUR_SHEET_ID' with the ID of the Google Sheet where you want to log the emails.
+  // Initialize the counter and log array
+  let totalFlagged = 0;
+  let emailLogs = [];
+
+  // Process each search query
+  searchQueries.forEach((query) => {
+    const threads = GmailApp.search(query);
+    threads.forEach((thread) => {
+      const messages = GmailApp.getMessagesForThread(thread);
+      messages.forEach((message) => {
+        if (message.getDate() < pastDate) { // Additional check
+          // Log the email details
+          console.log(`Flagged for deletion: ${message.getSubject()} from ${message.getFrom()}`);
+          emailLogs.push([new Date(), message.getSubject(), message.getFrom(), 'Flagged for Deletion']);
+          totalFlagged += 1;
+
+          // Add "DELETE-ME" label to the thread
+          label.addToThread(thread);
+        }
+      });
+    });
+  });
+
+  // Log to Spreadsheet
+  if (emailLogs.length > 0) {
+    // Append the log array to the log sheet
+    emailLogs.forEach((log) => logSheet.appendRow(log));
+    // Update the summary sheet
+    summarySheet.appendRow([new Date(), 'Total Flagged for Deletion', totalFlagged]);
+  }
+
+  // Log the total count
+  console.log(`Total emails flagged for deletion: ${totalFlagged}`);
+}

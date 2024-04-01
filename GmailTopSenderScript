@@ -1,17 +1,22 @@
-#Checks 7 days
-function getTopSendersFromLast7Days() {
+function getTopSenders(daysBack) {
   // Define the regular expression to extract email addresses
   let regEx = /(?<=\<)(.*?)(?=\>)/gm;
 
-  // Calculate the date 7 days ago from now
-  let sevenDaysAgo = new Date();
-  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-  console.log('Fetching emails from:', sevenDaysAgo.toISOString());
+  // Initialize the search query for Gmail
+  let searchQuery = '';
+  if (typeof daysBack === 'number') {
+    // Calculate the date 'daysBack' days ago from now
+    let startDate = new Date();
+    startDate.setDate(startDate.getDate() - daysBack);
+    console.log(`Fetching emails from the last ${daysBack} days, starting from:`, startDate.toISOString());
+    searchQuery = 'after:' + formatDateForGmail(startDate);
+  } else {
+    console.log('Fetching all available emails...');
+  }
 
-  // Fetch threads within the last 7 days
-  let searchQuery = 'after:' + formatDateForGmail(sevenDaysAgo);
+  // Fetch threads based on the search query
   console.log('Gmail search query:', searchQuery);
-  let threads = GmailApp.search(searchQuery);
+  let threads = searchQuery ? GmailApp.search(searchQuery) : GmailApp.getInboxThreads();
 
   console.log(`Found ${threads.length} threads. Processing...`);
 
@@ -21,16 +26,13 @@ function getTopSendersFromLast7Days() {
   threads.forEach((thread, index) => {
     let messages = thread.getMessages();
     messages.forEach((message) => {
-      let date = message.getDate();
-      if (date >= sevenDaysAgo) {
-        let address = message.getFrom().match(regEx);
-        if (address && address.length > 0) {
-          let emailAddress = address[0];
-          if (!senderCounts[emailAddress]) {
-            senderCounts[emailAddress] = 1;
-          } else {
-            senderCounts[emailAddress]++;
-          }
+      let address = message.getFrom().match(regEx);
+      if (address && address.length > 0) {
+        let emailAddress = address[0];
+        if (!senderCounts[emailAddress]) {
+          senderCounts[emailAddress] = 1;
+        } else {
+          senderCounts[emailAddress]++;
         }
       }
     });
@@ -50,7 +52,7 @@ function getTopSendersFromLast7Days() {
   sortedSenders.sort((a, b) => b[1] - a[1]);
 
   // Logging the top senders for review
-  console.log('Top senders in the last 7 days:', sortedSenders.slice(0, 10));
+  console.log('Top senders:', sortedSenders.slice(0, 10));
 
   // Return the sorted array of senders and their counts
   return sortedSenders;
@@ -62,5 +64,17 @@ function formatDateForGmail(date) {
 }
 
 // Example usage
-let topSenders = getTopSendersFromLast7Days();
-console.log('Process completed. Top senders:', topSenders.slice(0, 5));
+let topSendersRecent7Days = getTopSenders(7); // For the last 7 days
+console.log('Top senders in the last 7 days:', topSendersRecent7Days.slice(0, 5));
+
+let topSendersLast30Days = getTopSenders(30); // For the last 30 days
+console.log('Top senders in the last 30 days:', topSendersLast30Days.slice(0, 5));
+
+let topSendersLast60Days = getTopSenders(60); // For the last 60 days
+console.log('Top senders in the last 60 days:', topSendersLast60Days.slice(0, 5));
+
+let topSendersLast90Days = getTopSenders(90); // For the last 90 days
+console.log('Top senders in the last 90 days:', topSendersLast90Days.slice(0, 5));
+
+let topSendersAllTime = getTopSenders(); // For all time
+console.log('Top senders of all time:', topSendersAllTime.slice(0, 5));

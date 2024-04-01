@@ -1,50 +1,50 @@
-function getTopSendersForLast30Days() {
-  // Define the regular expression to extract email addresses
-  let regEx = /(?<=\<)(.*?)(?=\>)/gm;
+function logAndFlagEmails() {
+  // Define the search criteria
+  const daysAgo = 10; // Customize this value as needed
+  const pastDate = new Date();
+  pastDate.setDate(pastDate.getDate() - daysAgo);
+  const formattedDate = Utilities.formatDate(pastDate, Session.getScriptTimeZone(), "yyyy/MM/dd");
+  const excludeEmails = ["exclude1@example.com", "exclude2@example.com"]; // Add emails to exclude
+  let excludeQuery = excludeEmails.map(email => `-from:${email}`).join(' ');
+  const searchQueries = [
+    `(${excludeQuery} from:noreply@ OR from:*@test.com OR from:noreply@version.com) before:${formattedDate}`,
+    `${excludeQuery} from:x@verizon.com subject:TESTEMAIL before:${formattedDate}`
+  ];
 
-  // Calculate the date 30 days ago from now
-  let thirtyDaysAgo = new Date();
-  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-  console.log(`Fetching emails from the last 30 days, starting from:`, thirtyDaysAgo.toISOString());
+  // Spreadsheet setup
+  const spreadsheetId = 'YOUR_SPREADSHEET_ID'; // Replace with your actual Spreadsheet ID
+  const logSheetName = 'Sheet1'; // Change to your logging sheet's name
+  const summarySheetName = 'Sheet2'; // Change to your summary sheet's name
+  const spreadsheet = SpreadsheetApp.openById(spreadsheetId);
+  const logSheet = spreadsheet.getSheetByName(logSheetName);
+  const summarySheet = spreadsheet.getSheetByName(summarySheetName);
 
-  // Prepare the search query for Gmail
-  let searchQuery = 'after:' + formatDateForGmail(thirtyDaysAgo);
-  console.log('Gmail search query:', searchQuery);
+  if (!logSheet || !summarySheet) {
+    console.log('One or more specified sheets not found.');
+    return;
+  }
 
-  // Fetch threads based on the search query
-  let threads = GmailApp.search(searchQuery);
-  console.log(`Found ${threads.length} threads. Processing...`);
+  let totalFlagged = 0;
+  let emailLogs = [];
 
-  // Object to hold sender email addresses and their corresponding counts
-  let senderCounts = {};
-
-  threads.forEach((thread) => {
-    let messages = thread.getMessages();
-    messages.forEach((message) => {
-      let address = message.getFrom().match(regEx);
-      if (address && address.length > 0) {
-        let emailAddress = address[0];
-        senderCounts[emailAddress] = (senderCounts[emailAddress] || 0) + 1;
-      }
+  searchQueries.forEach((query) => {
+    const threads = GmailApp.search(query);
+    threads.forEach((thread) => {
+      const messages = GmailApp.getMessagesForThread(thread);
+      messages.forEach((message) => {
+        if (message.getDate() < pastDate) {
+          console.log(`Flagged for deletion: ${message.getSubject()} from ${message.getFrom()}`);
+          emailLogs.push([Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss'Z'"), message.getSubject(), message.getFrom(), 'Flagged for Deletion']);
+          totalFlagged += 1;
+        }
+      });
     });
   });
 
-  console.log('Compilation of senders and counts completed.');
+  if (emailLogs.length > 0) {
+    logSheet.getRange(logSheet.getLastRow() + 1, 1, emailLogs.length, emailLogs[0].length).setValues(emailLogs);
+    summarySheet.appendRow([Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd'T'HH:mm:ss'Z'"), 'Total Flagged for Deletion', totalFlagged]);
+  }
 
-  // Convert the senderCounts object into an array and sort by count in descending order
-  let sortedSenders = Object.entries(senderCounts).sort((a, b) => b[1] - a[1]);
-
-  // Logging the top senders for review
-  console.log('Top senders in the last 30 days:', sortedSenders.slice(0, 10));
-
-  // Optionally, return the sorted array of senders and their counts if needed elsewhere
-  return sortedSenders;
+  console.log(`Total emails flagged for deletion: ${totalFlagged}`);
 }
-
-function formatDateForGmail(date) {
-  // Format a date object into YYYY/MM/DD format for Gmail search
-  return date.getFullYear() + '/' + (date.getMonth() + 1).toString().padStart(2, '0') + '/' + date.getDate().toString().padStart(2, '0');
-}
-
-// Direct function call to get and log top senders for the last 30 days
-getTopSendersForLast30Days();

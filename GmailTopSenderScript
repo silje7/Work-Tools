@@ -1,0 +1,66 @@
+#Checks 7 days
+function getTopSendersFromLast7Days() {
+  // Define the regular expression to extract email addresses
+  let regEx = /(?<=\<)(.*?)(?=\>)/gm;
+
+  // Calculate the date 7 days ago from now
+  let sevenDaysAgo = new Date();
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+  console.log('Fetching emails from:', sevenDaysAgo.toISOString());
+
+  // Fetch threads within the last 7 days
+  let searchQuery = 'after:' + formatDateForGmail(sevenDaysAgo);
+  console.log('Gmail search query:', searchQuery);
+  let threads = GmailApp.search(searchQuery);
+
+  console.log(`Found ${threads.length} threads. Processing...`);
+
+  // Object to hold sender email addresses and their corresponding counts
+  let senderCounts = {};
+
+  threads.forEach((thread, index) => {
+    let messages = thread.getMessages();
+    messages.forEach((message) => {
+      let date = message.getDate();
+      if (date >= sevenDaysAgo) {
+        let address = message.getFrom().match(regEx);
+        if (address && address.length > 0) {
+          let emailAddress = address[0];
+          if (!senderCounts[emailAddress]) {
+            senderCounts[emailAddress] = 1;
+          } else {
+            senderCounts[emailAddress]++;
+          }
+        }
+      }
+    });
+
+    // Log progress for every 10 threads processed
+    if (index % 10 === 0) {
+      console.log(`Processed ${index + 1}/${threads.length} threads...`);
+    }
+  });
+
+  console.log('Compilation of senders and counts completed.');
+
+  // Convert the senderCounts object into an array of [email, count] arrays
+  let sortedSenders = Object.entries(senderCounts);
+
+  // Sort the array by count in descending order
+  sortedSenders.sort((a, b) => b[1] - a[1]);
+
+  // Logging the top senders for review
+  console.log('Top senders in the last 7 days:', sortedSenders.slice(0, 10));
+
+  // Return the sorted array of senders and their counts
+  return sortedSenders;
+}
+
+function formatDateForGmail(date) {
+  // Format a date object into YYYY/MM/DD format for Gmail search
+  return date.getFullYear() + '/' + (date.getMonth() + 1) + '/' + date.getDate();
+}
+
+// Example usage
+let topSenders = getTopSendersFromLast7Days();
+console.log('Process completed. Top senders:', topSenders.slice(0, 5));

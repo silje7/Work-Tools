@@ -1,0 +1,48 @@
+function deleteSpecificEmailsAndArchiveOld() {
+  // Delete specific emails based on the updated criteria
+  var today = new Date();
+  var twoYearsAgo = new Date(today.setFullYear(today.getFullYear() - 2));
+  var searchQueryNpnoc = 'from:noreply@npnoc.verizon.com to:hourlybodreportexecview@verizon.com before:' + twoYearsAgo.toISOString().substring(0, 10) + ' has:attachment';
+  var searchQueryInsideVerizon = 'from:insideverizon@verizon.com before:' + twoYearsAgo.toISOString().substring(0, 10) + ' has:attachment';
+  
+  var emailsToDeleteNpnoc = GmailApp.search(searchQueryNpnoc);
+  var countNpnoc = processEmailsForDeletion(emailsToDeleteNpnoc);
+  
+  var emailsToDeleteInsideVerizon = GmailApp.search(searchQueryInsideVerizon);
+  var countInsideVerizon = processEmailsForDeletion(emailsToDeleteInsideVerizon);
+  
+  Logger.log(countNpnoc + countInsideVerizon + ' specific emails with attachments older than 2 years were deleted.');
+  
+  // Archive emails older than 365 days
+  archiveOldEmails();
+}
+
+function processEmailsForDeletion(emails) {
+  var count = 0;
+  for (var i = 0; i < emails.length; i++) {
+    GmailApp.moveThreadToTrash(emails[i]);
+    count++;
+    logEmailsToSheet(emails[i]); // Assuming this function is already defined
+  }
+  return count;
+}
+
+function logEmailsToSheet(emailThread) {
+  var sheetId = 'YOUR_SHEET_ID'; // Make sure to replace YOUR_SHEET_ID with your actual Google Sheet ID
+  var sheet = SpreadsheetApp.openById(sheetId).getActiveSheet();
+  var subject = emailThread.getFirstMessageSubject();
+  var from = emailThread.getMessages()[0].getFrom();
+  var date = emailThread.getLastMessageDate();
+  
+  sheet.appendRow([new Date(), subject, from, date.toString()]);
+}
+
+function archiveOldEmails() {
+  const threads = GmailApp.search("in:inbox before:365d");
+  for (const thread of threads) {
+    thread.moveToArchive();
+  }
+  Logger.log(threads.length + ' emails were archived.');
+}
+
+// Remember to replace 'YOUR_SHEET_ID' with the ID of the Google Sheet where you want to log the emails.

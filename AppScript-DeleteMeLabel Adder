@@ -1,0 +1,35 @@
+//Label emails for deleteion deleteme
+
+function labelOldEmailsFromMissingContacts() {
+  const sheetId = '1GjoYXEUcIMCWV1HnA_sHKA29xfpsvVeFnwOZ_XWPh1g'; // Your Spreadsheet ID
+  const missingContactsSheetName = 'MissingContacts'; // Sheet name with missing contacts
+  const ss = SpreadsheetApp.openById(sheetId);
+  const sheet = ss.getSheetByName(missingContactsSheetName);
+  const range = sheet.getDataRange();
+  const values = range.getValues();
+  
+  // Ensure the "deleteme" label exists in Gmail, create if not
+  let label = GmailApp.getUserLabelByName("deleteme");
+  if (!label) {
+    label = GmailApp.createLabel("deleteme");
+  }
+  
+  let totalLabeled = 0;
+  
+  // Loop through each contact in the MissingContacts sheet
+  values.forEach(function(row) {
+    const email = row[0]; // Assuming emails are in the first column
+    const searchQuery = `from:${email} before:2020/01/01`;
+    
+    // Search for all emails from this contact before 2020
+    const threads = GmailApp.search(searchQuery);
+    threads.forEach(function(thread) {
+      thread.addLabel(label);
+    });
+    
+    totalLabeled += threads.length;
+  });
+  
+  console.log(`Total emails labeled 'deleteme': ${totalLabeled}`);
+}
+

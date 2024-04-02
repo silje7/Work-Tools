@@ -1,0 +1,79 @@
+// Script to check and identify emails that are no longer in the company directory for Clean up challenge
+// Will be using the unique emails in a deleteme filter in order to lower my data footprint
+
+function findEmailsAndCheckContacts() {
+  try {
+    const sheetId = '1GjoYXEUcIMCWV1HnA_sHKA29xfpsvVeFnwOZ_XWPh1g';
+    const allEmailsSheetName = 'Sheet1'; // Sheet for all extracted emails
+    const foundContactsSheetName = 'FoundContacts'; // Sheet for found contacts
+    const missingContactsSheetName = 'MissingContacts'; // New sheet for not found contacts
+    const baseSearchQuery = 'after:2015/12/31 before:2018/01/01';
+    const searchQuery = `${baseSearchQuery}`;
+
+    console.log(`Using search query: ${searchQuery}`);
+
+    // Fetch emails from Gmail
+    const threads = GmailApp.search(searchQuery);
+    console.log(`Found ${threads.length} threads.`);
+
+    const emails = threads.flatMap(thread =>
+      thread.getMessages().flatMap(message => {
+        const emailMatch = message.getFrom().match(/<(.+?)>/) || message.getFrom().match(/(.+?@test\.com)/);
+        return emailMatch && emailMatch[1] ? emailMatch[1] : [];
+      })
+    ).filter((value, index, self) => self.indexOf(value) === index);
+
+    console.log(`Extracted ${emails.length} unique emails.`);
+    
+    const foundContacts = [];
+    const notFoundContacts = []; // Track not found contacts
+
+    emails.forEach(email => {
+      // Use the People API to search for the contact by email
+      const response = People.People.searchContacts({
+        query: email,
+        readMask: 'emailAddresses,names',
+        sources: ['READ_SOURCE_TYPE_CONTACT']
+      });
+
+      if (response.results && response.results.length > 0) {
+        // Contact found
+        foundContacts.push(email);
+      } else {
+        // Contact not found
+        notFoundContacts.push(email);
+      }
+    });
+
+    console.log(`Found ${foundContacts.length} emails in contacts.`);
+    console.log(`Found contacts: ${foundContacts.join(', ')}`);
+    console.log(`Contacts not found: ${notFoundContacts.join(', ')}`);
+
+    // Write the extracted emails, found contacts, and not found contacts to their respective sheets
+    writeToSheet(sheetId, allEmailsSheetName, emails, "All Extracted Emails");
+    writeToSheet(sheetId, foundContactsSheetName, foundContacts, "Found in Contacts");
+    writeToSheet(sheetId, missingContactsSheetName, notFoundContacts, "Missing Contacts"); // New line for missing contacts
+  } catch (error) {
+    console.error("Script error:", error);
+  }
+}
+
+function writeToSheet(sheetId, sheetName, data, logMessage) {
+  const ss = SpreadsheetApp.openById(sheetId);
+  let sheet = ss.getSheetByName(sheetName);
+  
+  // Check if the sheet exists, if not, create it
+  if (!sheet) {
+    console.log(`Sheet "${sheetName}" not found. Creating a new one.`);
+    sheet = ss.insertSheet(sheetName);
+  }
+  
+  const values = data.map(email => [email]);
+  if (values.length > 0) {
+    sheet.clear(); // Clear previous contents
+    sheet.getRange(1, 1, values.length, 1).setValues(values); // Write new data
+    console.log(`Wrote ${values.length} ${logMessage} to the "${sheetName}" sheet.`);
+  } else {
+    console.log(`No ${logMessage} to write.`);
+  }
+}

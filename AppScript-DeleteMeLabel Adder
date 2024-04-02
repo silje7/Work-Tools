@@ -1,35 +1,43 @@
 //Label emails for deleteion deleteme
 
 function labelOldEmailsFromMissingContacts() {
-  const sheetId = '1GjoYXEUcIMCWV1HnA_sHKA29xfpsvVeFnwOZ_XWPh1g'; // Your Spreadsheet ID
-  const missingContactsSheetName = 'MissingContacts'; // Sheet name with missing contacts
+  const startTime = new Date();
+  console.log(`Script started at: ${startTime}`);
+
+  const sheetId = 'YOUR_SHEET_ID';
+  const missingContactsSheetName = 'MissingContacts';
+  console.log('Opening spreadsheet...');
   const ss = SpreadsheetApp.openById(sheetId);
   const sheet = ss.getSheetByName(missingContactsSheetName);
   const range = sheet.getDataRange();
   const values = range.getValues();
-  
-  // Ensure the "deleteme" label exists in Gmail, create if not
+  console.log(`Fetched ${values.length} rows from the spreadsheet.`);
+
   let label = GmailApp.getUserLabelByName("deleteme");
   if (!label) {
+    console.log('Creating "deleteme" label...');
     label = GmailApp.createLabel("deleteme");
   }
-  
-  let totalLabeled = 0;
-  
-  // Loop through each contact in the MissingContacts sheet
-  values.forEach(function(row) {
-    const email = row[0]; // Assuming emails are in the first column
-    const searchQuery = `from:${email} before:2020/01/01`;
-    
-    // Search for all emails from this contact before 2020
-    const threads = GmailApp.search(searchQuery);
-    threads.forEach(function(thread) {
-      thread.addLabel(label);
-    });
-    
-    totalLabeled += threads.length;
-  });
-  
-  console.log(`Total emails labeled 'deleteme': ${totalLabeled}`);
-}
 
+  values.forEach(function(row, index) {
+    const email = row[0].trim();
+    const query = `from:${email} before:2020/01/01`;
+    console.log(`[${index + 1}/${values.length}] Searching for emails with query: "${query}"`);
+    const searchStart = new Date();
+    const threads = GmailApp.search(query);
+    const searchEnd = new Date();
+    console.log(`Found ${threads.length} threads for ${email} in ${searchEnd - searchStart}ms.`);
+
+    if (threads.length > 0) {
+      console.log(`Applying label to ${threads.length} threads...`);
+      const labelStart = new Date();
+      threads.forEach(thread => thread.addLabel(label));
+      const labelEnd = new Date();
+      console.log(`Labeled ${threads.length} threads in ${labelEnd - labelStart}ms.`);
+    }
+  });
+
+  const endTime = new Date();
+  console.log(`Script finished at: ${endTime}`);
+  console.log(`Total execution time: ${(endTime - startTime)}ms.`);
+}

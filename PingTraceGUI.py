@@ -1,14 +1,13 @@
 import tkinter as tk
 from tkinter import scrolledtext, messagebox
 import subprocess
-import os
 import threading
 
 class NetworkToolGUI(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Network Tool")
-        self.geometry("600x400")
+        self.geometry("800x600")
         
         self.create_widgets()
         
@@ -17,18 +16,15 @@ class NetworkToolGUI(tk.Tk):
         self.input_label = tk.Label(self, text="Paste the list of SiteName, TicketNumber, and IPAddress (or just IPAddress):")
         self.input_label.pack(pady=5)
         
-        self.input_text = scrolledtext.ScrolledText(self, height=10, width=70)
+        self.input_text = scrolledtext.ScrolledText(self, height=10, width=95)
         self.input_text.pack(pady=5)
         
         self.run_button = tk.Button(self, text="Run Commands", command=self.run_commands)
         self.run_button.pack(pady=5)
         
         # Output Section
-        self.output_label = tk.Label(self, text="Output:")
-        self.output_label.pack(pady=5)
-        
-        self.output_text = scrolledtext.ScrolledText(self, height=10, width=70)
-        self.output_text.pack(pady=5)
+        self.output_frame = tk.Frame(self)
+        self.output_frame.pack(pady=5, fill=tk.BOTH, expand=True)
         
     def run_commands(self):
         raw_input = self.input_text.get("1.0", tk.END).strip()
@@ -38,11 +34,12 @@ class NetworkToolGUI(tk.Tk):
         
         targets = self.parse_input(raw_input)
         
-        self.output_text.delete("1.0", tk.END)
-        self.output_text.insert(tk.END, "Running tracert and ping in parallel for multiple IP addresses...\n")
+        for widget in self.output_frame.winfo_children():
+            widget.destroy()
         
         for site, ticket, ip in targets:
-            threading.Thread(target=self.execute_command, args=(site, ticket, ip)).start()
+            output_box = self.create_output_box(site, ticket, ip)
+            threading.Thread(target=self.execute_command, args=(site, ticket, ip, output_box)).start()
             
     def parse_input(self, raw_input):
         targets = []
@@ -64,7 +61,23 @@ class NetworkToolGUI(tk.Tk):
             targets.append((site, ticket, ip))
         return targets
     
-    def execute_command(self, site, ticket, ip):
+    def create_output_box(self, site, ticket, ip):
+        frame = tk.Frame(self.output_frame, relief=tk.SUNKEN, borderwidth=1)
+        frame.pack(pady=5, padx=5, fill=tk.BOTH, expand=True)
+        
+        title = f"Site: {site}, Ticket: {ticket}, IP: {ip}"
+        label = tk.Label(frame, text=title, font=('Arial', 12, 'bold'))
+        label.pack(pady=5)
+        
+        output_text = scrolledtext.ScrolledText(frame, height=10, width=95)
+        output_text.pack(pady=5)
+        
+        copy_button = tk.Button(frame, text="Copy Output", command=lambda: self.copy_to_clipboard(output_text.get("1.0", tk.END)))
+        copy_button.pack(pady=5)
+        
+        return output_text
+    
+    def execute_command(self, site, ticket, ip, output_text):
         title = f"{site} - {ip}"
         output = []
         output.append(f"Site: {site} Ticket: {ticket} IP: {ip}")
@@ -77,12 +90,18 @@ class NetworkToolGUI(tk.Tk):
         output.append(f"Site: {site} Ticket: {ticket} IP: {ip}")
         output.append("Press any key to close...\n")
         
-        self.update_output("\n".join(output))
+        self.update_output(output_text, "\n".join(output))
         
-    def update_output(self, output):
-        self.output_text.insert(tk.END, output + "\n")
-        self.output_text.see(tk.END)
+    def update_output(self, output_text, output):
+        output_text.insert(tk.END, output + "\n")
+        output_text.see(tk.END)
+    
+    def copy_to_clipboard(self, text):
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        messagebox.showinfo("Copied", "Output copied to clipboard")
 
 if __name__ == "__main__":
     app = NetworkToolGUI()
     app.mainloop()
+

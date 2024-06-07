@@ -23,19 +23,25 @@ class NetworkToolGUI(tk.Tk):
         self.run_button.pack(pady=5)
         
         # Output Section with scrollbar
-        self.output_canvas = tk.Canvas(self)
-        self.output_frame = tk.Frame(self.output_canvas)
-        self.vsb = tk.Scrollbar(self, orient="vertical", command=self.output_canvas.yview)
-        self.output_canvas.configure(yscrollcommand=self.vsb.set)
+        self.container_frame = tk.Frame(self)
+        self.container_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.vsb.pack(side="right", fill="y")
-        self.output_canvas.pack(side="left", fill="both", expand=True)
-        self.output_canvas.create_window((4,4), window=self.output_frame, anchor="nw")
+        self.canvas = tk.Canvas(self.container_frame)
+        self.scrollbar = tk.Scrollbar(self.container_frame, orient="vertical", command=self.canvas.yview)
+        self.scrollable_frame = tk.Frame(self.canvas)
 
-        self.output_frame.bind("<Configure>", self.on_frame_configure)
-        
-    def on_frame_configure(self, event):
-        self.output_canvas.configure(scrollregion=self.output_canvas.bbox("all"))
+        self.scrollable_frame.bind(
+            "<Configure>",
+            lambda e: self.canvas.configure(
+                scrollregion=self.canvas.bbox("all")
+            )
+        )
+
+        self.canvas.create_window((0, 0), window=self.scrollable_frame, anchor="nw")
+        self.canvas.configure(yscrollcommand=self.scrollbar.set)
+
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.scrollbar.pack(side="right", fill="y")
         
     def run_commands(self):
         raw_input = self.input_text.get("1.0", tk.END).strip()
@@ -45,7 +51,7 @@ class NetworkToolGUI(tk.Tk):
         
         targets = self.parse_input(raw_input)
         
-        for widget in self.output_frame.winfo_children():
+        for widget in self.scrollable_frame.winfo_children():
             widget.destroy()
         
         for site, ticket, ip in targets:
@@ -73,7 +79,7 @@ class NetworkToolGUI(tk.Tk):
         return targets
     
     def create_output_box(self, site, ticket, ip):
-        frame = tk.Frame(self.output_frame, relief=tk.SUNKEN, borderwidth=1)
+        frame = tk.Frame(self.scrollable_frame, relief=tk.SUNKEN, borderwidth=1)
         frame.pack(pady=5, padx=5, fill=tk.BOTH, expand=True)
         
         title = f"Site: {site}, Ticket: {ticket}, IP: {ip}"

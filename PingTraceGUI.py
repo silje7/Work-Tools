@@ -27,7 +27,7 @@ class NetworkToolGUI(tk.Tk):
         self.container_frame.pack(fill=tk.BOTH, expand=True)
 
         self.canvas = tk.Canvas(self.container_frame)
-        self.scrollbar = tk.Scrollbar(self.container_frame, orient="vertical", command=self.canvas.yview)
+        self.scrollbar = tk.Scrollbar(self.container_frame, orient="vertical", command=self.canvas.yview, width=20)
         self.scrollable_frame = tk.Frame(self.canvas)
 
         self.scrollable_frame.bind(
@@ -86,7 +86,7 @@ class NetworkToolGUI(tk.Tk):
         label = tk.Label(frame, text=title, font=('Arial', 12, 'bold'))
         label.pack(pady=5)
         
-        output_text = scrolledtext.ScrolledText(frame, height=10, width=95)
+        output_text = scrolledtext.ScrolledText(frame, height=30, width=95)
         output_text.pack(pady=5)
         
         copy_button = tk.Button(frame, text="Copy Output", command=lambda: self.copy_to_clipboard(output_text.get("1.0", tk.END)))

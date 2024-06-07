@@ -22,9 +22,20 @@ class NetworkToolGUI(tk.Tk):
         self.run_button = tk.Button(self, text="Run Commands", command=self.run_commands)
         self.run_button.pack(pady=5)
         
-        # Output Section
-        self.output_frame = tk.Frame(self)
-        self.output_frame.pack(pady=5, fill=tk.BOTH, expand=True)
+        # Output Section with scrollbar
+        self.output_canvas = tk.Canvas(self)
+        self.output_frame = tk.Frame(self.output_canvas)
+        self.vsb = tk.Scrollbar(self, orient="vertical", command=self.output_canvas.yview)
+        self.output_canvas.configure(yscrollcommand=self.vsb.set)
+
+        self.vsb.pack(side="right", fill="y")
+        self.output_canvas.pack(side="left", fill="both", expand=True)
+        self.output_canvas.create_window((4,4), window=self.output_frame, anchor="nw")
+
+        self.output_frame.bind("<Configure>", self.on_frame_configure)
+        
+    def on_frame_configure(self, event):
+        self.output_canvas.configure(scrollregion=self.output_canvas.bbox("all"))
         
     def run_commands(self):
         raw_input = self.input_text.get("1.0", tk.END).strip()
@@ -104,4 +115,3 @@ class NetworkToolGUI(tk.Tk):
 if __name__ == "__main__":
     app = NetworkToolGUI()
     app.mainloop()
-

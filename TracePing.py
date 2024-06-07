@@ -30,8 +30,8 @@ def main():
     print("Running tracert and ping in parallel for multiple IP addresses...")
 
     for site, ticket, ip in targets:
-        title = ip if site == "" else site
-        command = f'start "Title: {title}" cmd /k "title {title} && ' \
+        title = f"{site} - {ip}"
+        command = f'start cmd /k "title {title} && ' \
                   f'echo Site: {site} Ticket: {ticket} IP: {ip} && ' \
                   f'echo Tracert Output for {site} ({ticket}, {ip}): && ' \
                   f'tracert -w 300 {ip} && ' \

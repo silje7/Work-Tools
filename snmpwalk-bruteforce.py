@@ -1,32 +1,47 @@
 import subprocess
 import csv
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
-# Paths to the files
-ip_file = 'targets.txt'
-community_file = 'restrings.txt'
-working_output_file = 'working_snmp_results.csv'
-timeout_output_file = 'timedout_snmp_results.csv'
+# paths to the files
+ip_file = r'targetips.txt'
+community_file = r'readstrings.txt'
+working_output_file = r'working_snmp_results.csv'
+timeout_output_file = r'timedout_snmp_results.csv'
 
 def run_snmpwalk(ip, community_string):
-    """Run snmpwalk and return the output."""
+    """run snmpwalk and return the output."""
     try:
-        # Execute the snmpwalk command with subprocess
+        # execute the snmpwalk command with subprocess
         result = subprocess.run(
             ["snmpwalk.exe", "-v", "2c", "-c", community_string, ip],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
-            text=True
+            text=True,
+            timeout= 5  # set timeout to 10 seconds
         )
-        # Return stdout and stderr output
+        # return stdout and stderr output
         return result.stdout, result.stderr
+    except subprocess.TimeoutExpired:
+        return None, "timeout"
     except Exception as e:
         return None, str(e)
 
+def test_ip_community(ip, community):
+    """tests a single ip and community string combination."""
+    print(f"testing ip: {ip} : {community}")
+    output, error = run_snmpwalk(ip, community)
+
+    if output and "timeout" not in error:
+        print(f"working: {ip} with community string {community}\n")
+        return ip, community, "working"
+    else:
+        return ip, community, "timeout"
+
 def main():
-    # Load the list of IP addresses and community strings
+    # load the list of ip addresses and community strings
     if not os.path.exists(ip_file) or not os.path.exists(community_file):
-        print("Error: The required input files (targets.txt, restrings.txt) were not found.")
+        print("error: the required input files (targets.txt, restrings.txt) were not found.")
         return
 
     with open(ip_file, 'r') as ip_f:
@@ -35,43 +50,46 @@ def main():
     with open(community_file, 'r') as community_f:
         community_list = [line.strip() for line in community_f.readlines()]
 
-    # To store working combinations and timed-out combinations
+    # to store working combinations 
     working_results = []
-    timedout_results = []
+    timed_out_ips = []  # Store IPs that timed out with all communities
 
-    # Open CSV files to save the results
-    with open(working_output_file, 'w', newline='') as working_csv, open(timeout_output_file, 'w', newline='') as timeout_csv:
-        working_writer = csv.writer(working_csv)
-        timeout_writer = csv.writer(timeout_csv)
+    # iterate over ips
+    for ip in ip_list:
+        # flag to track if a working community string is found for the current ip
+        working_community_found = False
         
-        # Write headers for both files
-        working_writer.writerow(['IP Address', 'Community String'])
-        timeout_writer.writerow(['IP Address', 'Community Strings Tried'])
+        # use a threadpoolexecutor to run checks concurrently for each community string for the current ip
+        with ThreadPoolExecutor(max_workers=10) as executor:  # adjust max_workers as needed
+            futures = {executor.submit(test_ip_community, ip, community): community
+                       for community in community_list}
 
-        # Iterate through each IP and each community string
-        for ip in ip_list:
-            ip_worked = False  # Flag to track if any community string works for the IP
-            timeout_strings = []  # To collect all failed community strings for the IP
-
-            for community in community_list:
-                print(f"Testing IP: {ip} with community string: {community}")
-                output, error = run_snmpwalk(ip, community)
-
-                # Check if there's valid output (anything that is not empty or an error)
-                if output and "Timeout" not in error:
-                    print(f"Working SNMP for {ip} with community string {community}\n")
+            for future in as_completed(futures):
+                community = futures[future]
+                ip, _, result_type = future.result()
+                
+                if result_type == "working":
                     working_results.append((ip, community))
-                    working_writer.writerow([ip, community])
-                    ip_worked = True
-                    break  # Stop testing other community strings if one works
-                else:
-                    timeout_strings.append(community)
-            
-            # If no community string worked, save to timeout list
-            if not ip_worked:
-                print(f"Timed out for {ip} with all community strings\n")
-                timedout_results.append((ip, timeout_strings))
-                timeout_writer.writerow([ip, ", ".join(timeout_strings)])
+                    working_community_found = True
+                    break  # stop testing other community strings for this ip
+        
+        # If no working community found, log the IP and all tried communities
+        if not working_community_found:
+            timed_out_ips.append((ip, community_list))
+
+    # save the results to csv file
+    with open(working_output_file, 'w', newline='') as working_csv:
+        working_writer = csv.writer(working_csv)
+        working_writer.writerow(['ip address', 'community string'])
+        for ip, community in working_results:
+            working_writer.writerow([ip, community])
+
+    # Save the timed-out IPs and communities to a separate file
+    with open(timeout_output_file, 'w', newline='') as timeout_csv:
+        timeout_writer = csv.writer(timeout_csv)
+        timeout_writer.writerow(['ip address', 'community strings'])
+        for ip, communities in timed_out_ips:
+            timeout_writer.writerow([ip, ', '.join(communities)])  # Join communities into a single string
 
 if __name__ == "__main__":
     main()

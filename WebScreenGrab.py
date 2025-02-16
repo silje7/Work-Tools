@@ -1,6 +1,8 @@
 #!/usr/bin/env python
-r"""
+"""
 WebScreenGrab.py
+
+pip install selenium requests openpyxl
 
 Usage:
     python WebScreenGrab.py ips.txt --local-chromedriver "C:\tools\chromedriver-win64\chromedriver.exe"

@@ -129,12 +129,12 @@ def test_protocol(driver, base_url, protocol, timeout):
         try:
             screenshot_b64 = driver.get_screenshot_as_base64()
             ts = int(time.time() * 1000)
-            filename = os.path.join("screenshots", f"{protocol.replace('://','')}_{base_url}_{ts}.png")
-            os.makedirs(os.path.dirname(filename), exist_ok=True)
-            with open(filename, "wb") as f:
+            screenshot_filename = os.path.join("screenshots", f"{protocol.replace('://','')}_{base_url}_{ts}.png")
+            os.makedirs(os.path.dirname(screenshot_filename), exist_ok=True)
+            with open(screenshot_filename, "wb") as f:
                 f.write(base64.b64decode(screenshot_b64))
-            result["screenshot_path"] = filename
-            logging.info(f"Screenshot saved to {filename}")
+            result["screenshot_path"] = screenshot_filename
+            logging.info(f"Screenshot saved to {screenshot_filename}")
         except Exception as e:
             logging.error(f"Error taking screenshot for {full_url}: {e}")
 
@@ -174,6 +174,18 @@ def append_excel_row(wb, ws, row_data, excel_filename):
     for col_num, col in enumerate(EXCEL_COLUMNS, start=1):
         value = row_data.get(col.lower().replace(" ", "_"), "")
         ws.cell(row=row_num, column=col_num, value=value)
+
+    # Embed screenshot if it exists
+    if row_data.get("screenshot_path"):
+        try:
+            img = Image(row_data["screenshot_path"])
+            img.width = 320
+            img.height = 240
+            cell_addr = f"D{row_num}"
+            ws.add_image(img, cell_addr)
+        except Exception as e:
+            logging.error(f"Error embedding screenshot '{row_data['screenshot_path']}': {e}")
+
     wb.save(excel_filename)
 
 def init_xml(xml_filename):

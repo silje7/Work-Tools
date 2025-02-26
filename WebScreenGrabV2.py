@@ -49,7 +49,8 @@ from selenium.webdriver.chrome.service import Service
 # Disable InsecureRequestWarnings from requests
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Global columns for Excel/CSV (note the three new columns after IP/Host)
+# Global columns for Excel/CSV
+# Note the three new columns after IP/Host: "Dev Type", "Note", "Password"
 EXCEL_COLUMNS = [
     "IP/Host",
     "Dev Type",
@@ -99,9 +100,6 @@ def check_ip_protocol(ip_address, timeout=2):
     If neither is open, return "Neither".
     If 80 is open, return "HTTP".
     If 443 is open (and not 80), return "HTTPS".
-
-    This is a minimal check to guess the likely protocol
-    without actually loading a page in Selenium yet.
     """
     # Check port 80
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -134,9 +132,9 @@ def setup_driver(chrome_driver_path, timeout, headless=True):
     """
     options = Options()
     if headless:
-        # Use the "new" headless if your Chrome supports it, else just --headless
-        # options.add_argument("--headless=new")  # or:
+        # Force headless mode
         options.add_argument("--headless")
+        options.add_argument("--disable-gpu")
 
     # Bypass/ignore SSL errors
     options.add_argument("--ignore-certificate-errors")
@@ -249,46 +247,50 @@ def append_excel_row(wb, ws, row_data, excel_filename):
     """
     Append a single row to the Excel sheet with embedded screenshot,
     then save immediately.
-    Also adjust row height and column widths so the screenshot fits better.
+
+    We also set wrap_text for all cells, and dynamically size
+    the row and the "Screenshot" column so that the image is fully visible.
     """
     row_num = ws.max_row + 1
 
-    # Put data in the cells. We'll rely on the column name -> row_data key mapping
-    # but we added "Dev Type", "Note", "Password" with no script-provided values.
-    # They remain empty unless the user populates them manually later.
+    # Insert text-based data
     for col_idx, col_name in enumerate(EXCEL_COLUMNS, start=1):
-        # Convert col_name to a dictionary key (lower + underscores)
+        # Convert col_name to a dictionary key
         dict_key = col_name.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("-", "")
         val = row_data.get(dict_key, "")
-        ws.cell(row=row_num, column=col_idx, value=val)
+        cell = ws.cell(row=row_num, column=col_idx, value=val)
+        cell.alignment = Alignment(wrap_text=True)
 
-    # If there's a screenshot, embed it in the "Screenshot" column (which is #7 in the list).
-    # Column 7 is "Screenshot" => column G in Excel (A=1,B=2,...,G=7).
+    # The "Screenshot" column is #7 => G
     screenshot_col_letter = get_column_letter(7)  # G
     screenshot_path = row_data.get("screenshot_path", "")
     if screenshot_path:
         try:
             img = Image(screenshot_path)
-            # Resize the embedded image
+            # The actual image is 320x240
+            # We'll guess ~72 points/inch, so row height ~ (240/96)*72=180 points
+            # and column width ~ (320/7.0) => ~45
             img.width = 320
             img.height = 240
             cell_addr = f"{screenshot_col_letter}{row_num}"
             ws.add_image(img, cell_addr)
+
+            # set row height
+            ws.row_dimensions[row_num].height = 180
+            # set column width
+            ws.column_dimensions[screenshot_col_letter].width = 45
         except Exception as e:
             logging.error(f"Error embedding screenshot '{screenshot_path}': {e}")
+    else:
+        # No screenshot, just set row to normal
+        ws.row_dimensions[row_num].height = 15
 
-    # Try to set row height so the screenshot fits, ~ 240 px => ~ 180 points
-    # 1 point = 1/72 inch, typical screen ~ 96 dpi, so 240 px ~ 2.5 inches => 180 points
-    ws.row_dimensions[row_num].height = 180
+    # For any other columns, let's set a modest default width
+    # so that the text is somewhat readable and can wrap
+    for col_letter in ['A','B','C','D','E','F','H','I','J','K','L','M','N','O','P','Q','R','S','T','U','V','W']:
+        if not ws.column_dimensions[col_letter].width:
+            ws.column_dimensions[col_letter].width = 20
 
-    # Make the screenshot column wide enough
-    ws.column_dimensions[screenshot_col_letter].width = 45
-
-    # Optionally set other columns to a reasonable width
-    # For example, IP/Host = col 1 => A
-    ws.column_dimensions['A'].width = 20
-
-    # Save the workbook after each row
     wb.save(excel_filename)
 
 
@@ -468,7 +470,3 @@ def main():
 
     logging.info("If images appear 'floating' in Excel, note that Excel doesn't move images "
                  "when sorting rows. They are anchored to the cell, but not truly cell data.")
-
-
-if __name__ == "__main__":
-    main()

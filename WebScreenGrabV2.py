@@ -1,18 +1,22 @@
 #!/usr/bin/env python
-r"""
+"""
 WebScreenGrab.py
 
+pip install selenium requests openpyxl
+
 Usage:
-    python WebScreenGrab.py ips.txt --local-chromedriver "C:\Users\V613867\Desktop\Projects\tools\chromedriver-win64\chromedriver.exe"
-    [--output-excel results.xlsx] [--timeout 10] [--no-headless]
+    python WebScreenGrab.py ips.txt --local-chromedriver "C:\tools\chromedriver-win64\chromedriver.exe"
+    [--output-excel results.xlsx] [--output-xml results.xml] [--output-csv results.csv] [--timeout 10]
 
 Description:
-    Reads a list of IPs/hosts from a file, removing duplicates. For each host:
-      - Pings the host to see if it's reachable. If not, skip.
-      - Tries HTTP first, then HTTPS for verification.
-      - Takes a screenshot (preferring the protocol that worked first) and collects metadata.
-      - Writes an Excel row (with embedded screenshot) for each host in real-time.
-      - The script is headless by default.
+    Reads a list of IPs/hosts from a file, removing duplicates. For each host, tries HTTPS then HTTP,
+    embedding a screenshot (preferring HTTPS if it works) and collecting metadata.
+    Writes an Excel row, an XML entry, and a CSV row for each host in real-time (so partial results
+    are saved even if the script stops early).
+
+    The Excel file has a "Screenshot" column with an embedded PNG, plus "HTTPS Works", "Title (Chosen Protocol)",
+    and all metadata columns (HTTP/HTTPS). The script is headless by default and times out at 10s
+    (override with --timeout).
 
 Dependencies:
     pip install selenium requests openpyxl
@@ -22,12 +26,11 @@ import argparse
 import base64
 import logging
 import os
-import socket
-import subprocess
 import sys
 import time
-from time import sleep
 import urllib3
+import xml.etree.ElementTree as ET
+from time import sleep
 from io import BytesIO
 
 import requests
@@ -39,16 +42,14 @@ from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
+import csv
 
 # Disable InsecureRequestWarnings from requests
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Global columns for Excel
+# Global columns for Excel/CSV
 EXCEL_COLUMNS = [
-    "Ip Address",
-    "Dev Type",
-    "Note",
-    "Password",
+    "IP/Host",
     "HTTPS Works",
     "Title (Chosen Protocol)",
     "Screenshot",
@@ -66,52 +67,16 @@ EXCEL_COLUMNS = [
     "HTTP cache-control",
     "HTTP Remote Body",
     "HTTP Remote Headers",
-    "Ping Success",
-    "Protocol Used"
 ]
 
-
-def ping_host(ip):
-    """Ping a host (Windows style, one ping) to check if it is reachable."""
-    try:
-        output = subprocess.run(["ping", "-n", "1", ip],
-                                capture_output=True, text=True)
-        return "TTL" in output.stdout
-    except Exception as e:
-        logging.error(f"Error pinging {ip}: {e}")
-        return False
+# Global list to hold image references so they aren’t garbage-collected
+_image_refs = []
 
 
-def check_ip_protocol(ip_address, timeout=2):
-    """Quick TCP-based check: returns 'HTTP', 'HTTPS', or 'Neither'."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-    try:
-        sock.connect((ip_address, 80))
-        sock.close()
-        return "HTTP"
-    except:
-        pass
-
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
-    try:
-        sock.connect((ip_address, 443))
-        sock.close()
-        return "HTTPS"
-    except:
-        pass
-
-    return "Neither"
-
-
-def setup_driver(chrome_driver_path, timeout, headless=True):
-    """Initialize the Chrome driver with the given timeout and headless settings."""
+def setup_driver(chrome_driver_path, timeout):
+    """Initialize a headless Chrome driver with a given timeout."""
     options = Options()
-    if headless:
-        options.add_argument("--headless")
-    options.add_argument("--ignore-certificate-errors")
-    options.add_argument("--allow-insecure-localhost")
+    options.headless = True  # Headless mode; for newer Chrome you might need: options.add_argument("--headless=new")
     try:
         service = Service(executable_path=chrome_driver_path)
         driver = webdriver.Chrome(service=service, options=options)
@@ -126,8 +91,17 @@ def setup_driver(chrome_driver_path, timeout, headless=True):
 
 def test_protocol(driver, base_url, protocol, timeout):
     """
-    Load the host with Selenium, take a screenshot,
-    and fetch response metadata with requests.
+    Attempt to load the given host+protocol in Selenium, take a screenshot,
+    and also do a requests.get for response metadata.
+
+    Returns a dictionary with:
+      - works (bool): whether Selenium load succeeded
+      - title (str): page title from Selenium
+      - screenshot_path (str): path to saved screenshot PNG (empty if fail)
+      - status_code (int or empty): HTTP status from requests
+      - content_length, content_type, cache_control (str): from requests
+      - remote_body (str): entire response body from requests
+      - remote_headers (str): stringified response headers
     """
     result = {
         "works": False,
@@ -144,9 +118,10 @@ def test_protocol(driver, base_url, protocol, timeout):
     full_url = protocol + base_url
     logging.info(f"Testing {full_url}...")
 
+    # 1) Selenium load
     try:
         driver.get(full_url)
-        sleep(2)
+        sleep(2)  # small wait to allow page to render
         result["title"] = driver.title
         result["works"] = True
     except TimeoutException as te:
@@ -154,22 +129,24 @@ def test_protocol(driver, base_url, protocol, timeout):
     except Exception as e:
         logging.error(f"Error loading {full_url} with Selenium: {e}")
 
+    # 2) Screenshot if Selenium worked
     if result["works"]:
         try:
             screenshot_b64 = driver.get_screenshot_as_base64()
             ts = int(time.time() * 1000)
-            screenshot_filename = os.path.join(
+            filename = os.path.join(
                 "screenshots",
                 f"{protocol.replace('://','')}_{base_url}_{ts}.png"
             )
-            os.makedirs(os.path.dirname(screenshot_filename), exist_ok=True)
-            with open(screenshot_filename, "wb") as f:
+            os.makedirs(os.path.dirname(filename), exist_ok=True)
+            with open(filename, "wb") as f:
                 f.write(base64.b64decode(screenshot_b64))
-            result["screenshot_path"] = screenshot_filename
-            logging.info(f"Screenshot saved to {screenshot_filename}")
+            result["screenshot_path"] = filename
+            logging.info(f"Screenshot saved to {filename}")
         except Exception as e:
             logging.error(f"Error taking screenshot for {full_url}: {e}")
 
+    # 3) Requests-based metadata
     try:
         r = requests.get(full_url, verify=False, timeout=timeout)
         result["status_code"] = r.status_code
@@ -186,21 +163,14 @@ def test_protocol(driver, base_url, protocol, timeout):
 
 def init_excel(excel_filename):
     """
-    Create a new Excel workbook with headers if it doesn't exist,
-    or load an existing one.
+    If the Excel file does not exist, create it and write headers.
+    Otherwise, load it.
+    Returns (workbook, worksheet).
     """
     if os.path.exists(excel_filename):
-        try:
-            wb = load_workbook(excel_filename)
-            ws = wb.active
-            logging.info(f"Loaded existing Excel workbook: {excel_filename}")
-        except Exception as e:
-            logging.error(f"Error loading workbook {excel_filename}: {e}. Creating new workbook.")
-            wb = Workbook()
-            ws = wb.active
-            ws.title = "Results"
-            ws.append(EXCEL_COLUMNS)
-            wb.save(excel_filename)
+        wb = load_workbook(excel_filename)
+        ws = wb.active
+        logging.info(f"Loaded existing Excel workbook: {excel_filename}")
     else:
         wb = Workbook()
         ws = wb.active
@@ -213,129 +183,230 @@ def init_excel(excel_filename):
 
 def append_excel_row(wb, ws, row_data, excel_filename):
     """
-    Append a row of data to the Excel sheet and embed the screenshot.
-    Simplified image embedding using a BytesIO stream that remains attached.
+    Append a single row to the Excel sheet with embedded screenshot,
+    auto-adjust cell widths, then save immediately.
+    Uses a BytesIO stream (with a global reference) to embed the image.
     """
     row_num = ws.max_row + 1
 
-    for col_idx, col_name in enumerate(EXCEL_COLUMNS, start=1):
-        key = col_name.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("-", "")
-        ws.cell(row=row_num, column=col_idx, value=row_data.get(key, ""))
+    # Populate cells (using specific columns for clarity)
+    ws.cell(row=row_num, column=1, value=row_data["ip_host"])
+    ws.cell(row=row_num, column=2, value=str(row_data["https_works"]))
+    ws.cell(row=row_num, column=3, value=row_data["chosen_title"])
+    # Column 4 (for screenshot) will be handled separately
 
-    # Embed screenshot in column 7 if available
-    screenshot_path = row_data.get("screenshot_path", "")
-    if screenshot_path:
+    ws.cell(row=row_num, column=5, value=row_data["https_title"])
+    ws.cell(row=row_num, column=6, value=str(row_data["https_status_code"]))
+    ws.cell(row=row_num, column=7, value=row_data["https_content_length"])
+    ws.cell(row=row_num, column=8, value=row_data["https_content_type"])
+    ws.cell(row=row_num, column=9, value=row_data["https_cache_control"])
+    ws.cell(row=row_num, column=10, value=row_data["https_remote_body"])
+    ws.cell(row=row_num, column=11, value=row_data["https_remote_headers"])
+
+    ws.cell(row=row_num, column=12, value=row_data["http_title"])
+    ws.cell(row=row_num, column=13, value=str(row_data["http_status_code"]))
+    ws.cell(row=row_num, column=14, value=row_data["http_content_length"])
+    ws.cell(row=row_num, column=15, value=row_data["http_content_type"])
+    ws.cell(row=row_num, column=16, value=row_data["http_cache_control"])
+    ws.cell(row=row_num, column=17, value=row_data["http_remote_body"])
+    ws.cell(row=row_num, column=18, value=row_data["http_remote_headers"])
+
+    # Embed screenshot in column 4 (D) if available
+    if row_data["screenshot_path"]:
         try:
-            with open(screenshot_path, "rb") as f:
+            with open(row_data["screenshot_path"], "rb") as f:
                 image_data = f.read()
             image_stream = BytesIO(image_data)
             image_stream.seek(0)
             img = Image(image_stream)
-            # Keep a reference to the stream so it isn't garbage-collected
-            img._data_stream = image_stream
+            # Keep a reference to the stream to avoid garbage collection
+            _image_refs.append(img)
             img.width = 320
             img.height = 240
-            cell_addr = f"{get_column_letter(7)}{row_num}"
+            cell_addr = f"D{row_num}"
             ws.add_image(img, cell_addr)
-            ws[cell_addr].alignment = Alignment(horizontal='center', vertical='center')
         except Exception as e:
-            logging.error(f"Error embedding screenshot '{screenshot_path}': {e}")
+            logging.error(f"Error embedding screenshot '{row_data['screenshot_path']}': {e}")
 
-    ws.row_dimensions[row_num].height = 180
-    ws.column_dimensions[get_column_letter(7)].width = 46
-    ws.column_dimensions['A'].width = 20
+    # Adjust cell alignment and column widths
+    for col_idx in range(1, len(EXCEL_COLUMNS) + 1):
+        cell = ws.cell(row=row_num, column=col_idx)
+        cell.alignment = Alignment(wrap_text=True)
+        col_letter = get_column_letter(col_idx)
+        current_width = ws.column_dimensions[col_letter].width or 10
+        needed_width = min(len(str(cell.value)) + 2, 100)
+        if needed_width > current_width:
+            ws.column_dimensions[col_letter].width = needed_width
+
+    # Force the screenshot column (D) to be a bit wider
+    ws.column_dimensions['D'].width = 45
 
     wb.save(excel_filename)
 
 
+def init_xml(xml_filename):
+    """
+    If XML file doesn't exist, create a root <Results> and save it.
+    """
+    if not os.path.exists(xml_filename):
+        root = ET.Element("Results")
+        tree = ET.ElementTree(root)
+        tree.write(xml_filename, encoding="utf-8", xml_declaration=True)
+        logging.info(f"Created new XML file: {xml_filename}")
+
+
+def append_xml_entry(xml_filename, row_data):
+    """
+    Load existing XML, append a single <Entry>, and save immediately.
+    """
+    tree = ET.parse(xml_filename)
+    root = tree.getroot()
+
+    entry = ET.SubElement(root, "Entry")
+    ET.SubElement(entry, "IP_Host").text = row_data["ip_host"]
+    ET.SubElement(entry, "HTTPS_Works").text = str(row_data["https_works"])
+    ET.SubElement(entry, "Chosen_Title").text = row_data["chosen_title"]
+    ET.SubElement(entry, "Screenshot_Path").text = row_data["screenshot_path"]
+
+    https_elem = ET.SubElement(entry, "HTTPS_Info")
+    ET.SubElement(https_elem, "Title").text = row_data["https_title"]
+    ET.SubElement(https_elem, "Status_Code").text = str(row_data["https_status_code"])
+    ET.SubElement(https_elem, "Content_Length").text = row_data["https_content_length"]
+    ET.SubElement(https_elem, "Content_Type").text = row_data["https_content_type"]
+    ET.SubElement(https_elem, "Cache_Control").text = row_data["https_cache_control"]
+    ET.SubElement(https_elem, "Remote_Body").text = row_data["https_remote_body"]
+    ET.SubElement(https_elem, "Remote_Headers").text = row_data["https_remote_headers"]
+
+    http_elem = ET.SubElement(entry, "HTTP_Info")
+    ET.SubElement(http_elem, "Title").text = row_data["http_title"]
+    ET.SubElement(http_elem, "Status_Code").text = str(row_data["http_status_code"])
+    ET.SubElement(http_elem, "Content_Length").text = row_data["http_content_length"]
+    ET.SubElement(http_elem, "Content_Type").text = row_data["http_content_type"]
+    ET.SubElement(http_elem, "Cache_Control").text = row_data["http_cache_control"]
+    ET.SubElement(http_elem, "Remote_Body").text = row_data["http_remote_body"]
+    ET.SubElement(http_elem, "Remote_Headers").text = row_data["http_remote_headers"]
+
+    tree.write(xml_filename, encoding="utf-8", xml_declaration=True)
+
+
+def init_csv(csv_filename):
+    """
+    If CSV doesn't exist, create it and write the header row.
+    """
+    if not os.path.exists(csv_filename):
+        with open(csv_filename, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(EXCEL_COLUMNS)
+        logging.info(f"Created new CSV file: {csv_filename}")
+
+
+def append_csv_row(csv_filename, row_data):
+    """
+    Append one row to CSV (images are stored as path).
+    """
+    with open(csv_filename, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow([
+            row_data["ip_host"],
+            str(row_data["https_works"]),
+            row_data["chosen_title"],
+            row_data["screenshot_path"],
+            row_data["https_title"],
+            row_data["https_status_code"],
+            row_data["https_content_length"],
+            row_data["https_content_type"],
+            row_data["https_cache_control"],
+            row_data["https_remote_body"],
+            row_data["https_remote_headers"],
+            row_data["http_title"],
+            row_data["http_status_code"],
+            row_data["http_content_length"],
+            row_data["http_content_type"],
+            row_data["http_cache_control"],
+            row_data["http_remote_body"],
+            row_data["http_remote_headers"]
+        ])
+
+
 def main():
     parser = argparse.ArgumentParser(
-        description="WebScreenGrab - Single-row-per-host with embedded screenshots and metadata."
+        description="WebScreenGrab - Single-row-per-host with embedded screenshots and metadata, updated per-entry."
     )
     parser.add_argument("ip_file", help="Path to the file containing IP addresses/hosts (one per line)")
-    parser.add_argument("--local-chromedriver", required=True,
-                        help="Path to the local chromedriver executable")
-    parser.add_argument("--output-excel", default="results.xlsx",
-                        help="Filename for the Excel output")
-    parser.add_argument("--timeout", type=int, default=10,
-                        help="Timeout in seconds for page loads/HTTP requests")
-    parser.add_argument("--no-headless", action="store_true",
-                        help="Run Chrome in visible mode (not headless).")
+    parser.add_argument("--local-chromedriver", required=True, help="Path to the local chromedriver executable")
+    parser.add_argument("--output-excel", default="results.xlsx", help="Filename for the Excel output")
+    parser.add_argument("--output-xml", default="results.xml", help="Filename for the XML output")
+    parser.add_argument("--output-csv", default="results.csv", help="Filename for the CSV output")
+    parser.add_argument("--timeout", type=int, default=10, help="Timeout in seconds for page loads/HTTP requests")
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO,
-                        format="[%(asctime)s] %(levelname)s: %(message)s")
+    logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
 
+    # Read IPs/hosts, remove duplicates
     try:
         with open(args.ip_file, "r", encoding="utf-8") as f:
             lines = [line.strip() for line in f if line.strip()]
         unique_hosts = list(set(lines))
-        logging.info(f"Found {len(lines)} lines, deduplicated to {len(unique_hosts)} entries.")
+        logging.info(f"Found {len(lines)} IP/host lines, deduplicated to {len(unique_hosts)} entries.")
     except Exception as e:
         logging.error(f"Error reading IP file: {e}")
         sys.exit(1)
 
-    driver = setup_driver(chrome_driver_path=args.local_chromedriver,
-                          timeout=args.timeout,
-                          headless=(not args.no_headless))
+    # Initialize Selenium driver
+    driver = setup_driver(args.local_chromedriver, args.timeout)
+
+    # Initialize or load Excel, XML, CSV
     wb, ws = init_excel(args.output_excel)
+    init_xml(args.output_xml)
+    init_csv(args.output_csv)
 
+    # Process each unique host
     for host in unique_hosts:
-        if not ping_host(host):
-            logging.info(f"{host} is unreachable. Skipping.")
-            continue
-
-        logging.info(f"{host} => probable protocol: {check_ip_protocol(host)}")
-
+        https_res = test_protocol(driver, host, "https://", args.timeout)
         http_res = test_protocol(driver, host, "http://", args.timeout)
-        if http_res["works"]:
-            protocol_used = "HTTP"
-            https_res = test_protocol(driver, host, "https://", args.timeout)
-        else:
-            https_res = test_protocol(driver, host, "https://", args.timeout)
-            protocol_used = "HTTPS" if https_res["works"] else "None"
 
+        # Construct a single row of data
         row_data = {
-            "ip_address": host,
-            "dev_type": "",
-            "note": "",
-            "password": "",
+            "ip_host": host,
             "https_works": https_res["works"],
             "screenshot_path": "",
-            "title_chosen_protocol": "",
+            "chosen_title": "",
+            # HTTPS columns
             "https_title": https_res["title"],
             "https_status_code": https_res["status_code"],
             "https_content_length": https_res["content_length"],
             "https_content_type": https_res["content_type"],
-            "https_cachecontrol": https_res["cache_control"],
+            "https_cache_control": https_res["cache_control"],
             "https_remote_body": https_res["remote_body"],
             "https_remote_headers": https_res["remote_headers"],
+            # HTTP columns
             "http_title": http_res["title"],
             "http_status_code": http_res["status_code"],
             "http_content_length": http_res["content_length"],
             "http_content_type": http_res["content_type"],
-            "http_cachecontrol": http_res["cache_control"],
+            "http_cache_control": http_res["cache_control"],
             "http_remote_body": http_res["remote_body"],
-            "http_remote_headers": http_res["remote_headers"],
-            "ping_success": "Yes",
-            "protocol_used": protocol_used
+            "http_remote_headers": http_res["remote_headers"]
         }
 
-        if http_res["works"] and http_res["screenshot_path"]:
-            row_data["screenshot_path"] = http_res["screenshot_path"]
-            row_data["title_chosen_protocol"] = http_res["title"]
-        elif https_res["works"] and https_res["screenshot_path"]:
+        # Decide which screenshot to embed (prefer HTTPS if it worked)
+        if https_res["works"] and https_res["screenshot_path"]:
             row_data["screenshot_path"] = https_res["screenshot_path"]
-            row_data["title_chosen_protocol"] = https_res["title"]
+            row_data["chosen_title"] = https_res["title"]
+        elif http_res["works"] and http_res["screenshot_path"]:
+            row_data["screenshot_path"] = http_res["screenshot_path"]
+            row_data["chosen_title"] = http_res["title"]
         else:
             row_data["screenshot_path"] = ""
-            row_data["title_chosen_protocol"] = http_res["title"] or https_res["title"]
+            row_data["chosen_title"] = https_res["title"] or http_res["title"]
 
+        # Append to Excel, XML, CSV one entry at a time
         append_excel_row(wb, ws, row_data, args.output_excel)
+        append_xml_entry(args.output_xml, row_data)
+        append_csv_row(args.output_csv, row_data)
 
     driver.quit()
     logging.info("All done.")
-    logging.info("Note: Excel images are anchored to cells and won’t move with sorting.")
 
 
 if __name__ == "__main__":

@@ -34,7 +34,6 @@ import sys
 import time
 from time import sleep
 import urllib3
-import xml.etree.ElementTree as ET
 
 import requests
 from openpyxl import Workbook, load_workbook
@@ -49,9 +48,9 @@ from selenium.webdriver.chrome.service import Service
 # Disable InsecureRequestWarnings from requests
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# Global columns for Excel/CSV (note the three new columns after IP/Host)
+# Global columns for Excel
 EXCEL_COLUMNS = [
-    "IP/Host",
+    "Ip Address",
     "Dev Type",
     "Note",
     "Password",
@@ -100,8 +99,7 @@ def check_ip_protocol(ip_address, timeout=2):
     If 80 is open, return "HTTP".
     If 443 is open (and not 80), return "HTTPS".
 
-    This is a minimal check to guess the likely protocol
-    without actually loading a page in Selenium yet.
+    This is a minimal check to guess the likely protocol without actually loading a page in Selenium yet.
     """
     # Check port 80
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -244,20 +242,20 @@ def init_excel(excel_filename):
 
 def append_excel_row(wb, ws, row_data, excel_filename):
     """
-    Append a single row to the Excel sheet with embedded screenshot,
+    Append a single row to the Excel sheet with an embedded screenshot,
     then save immediately.
     Also adjust row height and column widths so the screenshot fits better.
     """
     row_num = ws.max_row + 1
 
-    # Put data in the cells. We'll rely on the column name -> row_data key mapping.
+    # Put data in the cells. We rely on the column name -> row_data key mapping.
     for col_idx, col_name in enumerate(EXCEL_COLUMNS, start=1):
-        # Convert col_name to a dictionary key (lower + underscores, remove parentheses and dashes)
+        # Convert col_name to a dictionary key (lowercase, underscores instead of spaces)
         dict_key = col_name.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("-", "")
         val = row_data.get(dict_key, "")
         ws.cell(row=row_num, column=col_idx, value=val)
 
-    # If there's a screenshot, embed it in the "Screenshot" column (column 7, or "G")
+    # If there's a screenshot, embed it in the "Screenshot" column (column 7)
     screenshot_col_letter = get_column_letter(7)
     screenshot_path = row_data.get("screenshot_path", "")
     if screenshot_path:
@@ -276,67 +274,14 @@ def append_excel_row(wb, ws, row_data, excel_filename):
     # Set row height so the screenshot fits (~240 px ≈ 180 points)
     ws.row_dimensions[row_num].height = 180
 
-    # Set the screenshot column width (roughly calculated from image width; 320 px ≈ 46 Excel units)
+    # Set the screenshot column width (320 px ≈ 46 Excel units)
     ws.column_dimensions[screenshot_col_letter].width = 46
 
-    # Optionally set other columns to a reasonable width (e.g., IP/Host column)
+    # Optionally set other columns to a reasonable width (e.g., Ip Address column)
     ws.column_dimensions['A'].width = 20
 
     # Save the workbook after each row
     wb.save(excel_filename)
-
-
-def init_xml(xml_filename):
-    """
-    If XML file doesn't exist, create a root <Results> and save it.
-    """
-    if not os.path.exists(xml_filename):
-        root = ET.Element("Results")
-        tree = ET.ElementTree(root)
-        tree.write(xml_filename, encoding="utf-8", xml_declaration=True)
-        logging.info(f"Created new XML file: {xml_filename}")
-
-
-def append_xml_entry(xml_filename, row_data):
-    """
-    Load existing XML, append a single <Entry>, and save immediately.
-    Each key/value pair in row_data becomes a subelement.
-    """
-    tree = ET.parse(xml_filename)
-    root = tree.getroot()
-
-    entry = ET.SubElement(root, "Entry")
-    for key, value in row_data.items():
-        # Remove problematic characters from the key for XML tags
-        tag = key.replace("(", "").replace(")", "").replace(" ", "_")
-        sub = ET.SubElement(entry, tag)
-        sub.text = str(value)
-    tree.write(xml_filename, encoding="utf-8", xml_declaration=True)
-
-
-def init_csv(csv_filename):
-    """
-    If CSV doesn't exist, create it and write the header row.
-    Otherwise do nothing.
-    """
-    if not os.path.exists(csv_filename):
-        with open(csv_filename, "w", newline="", encoding="utf-8") as f:
-            writer = csv.writer(f)
-            writer.writerow(EXCEL_COLUMNS)
-        logging.info(f"Created new CSV file: {csv_filename}")
-
-
-def append_csv_row(csv_filename, row_data):
-    """
-    Append one row to CSV. We won't embed images in CSV (only store the path).
-    """
-    with open(csv_filename, "a", newline="", encoding="utf-8") as f:
-        writer = csv.writer(f)
-        row = []
-        for col_name in EXCEL_COLUMNS:
-            dict_key = col_name.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("-", "")
-            row.append(row_data.get(dict_key, ""))
-        writer.writerow(row)
 
 
 def main():
@@ -348,10 +293,6 @@ def main():
                         help="Path to the local chromedriver executable")
     parser.add_argument("--output-excel", default="results.xlsx",
                         help="Filename for the Excel output")
-    parser.add_argument("--output-xml", default="results.xml",
-                        help="Filename for the XML output")
-    parser.add_argument("--output-csv", default="results.csv",
-                        help="Filename for the CSV output")
     parser.add_argument("--timeout", type=int, default=10,
                         help="Timeout in seconds for page loads/HTTP requests")
     parser.add_argument("--no-headless", action="store_true",
@@ -378,10 +319,8 @@ def main():
         headless=(not args.no_headless)
     )
 
-    # Initialize or load Excel, XML, CSV
+    # Initialize or load Excel
     wb, ws = init_excel(args.output_excel)
-    init_xml(args.output_xml)
-    init_csv(args.output_csv)
 
     # Process each unique host
     for host in unique_hosts:
@@ -410,12 +349,10 @@ def main():
 
         # 4) Construct a single row of data
         row_data = {
-            "ip/host": host,  # key changed to match header "IP/Host"
-            # The user will fill these next three manually later if desired
+            "ip_address": host,  # Updated key to match "Ip Address"
             "dev_type": "",
             "note": "",
             "password": "",
-
             "https_works": https_works,
             "screenshot_path": "",
             "title_chosen_protocol": "",
@@ -451,14 +388,11 @@ def main():
             row_data["screenshot_path"] = ""
             row_data["title_chosen_protocol"] = http_res["title"] or https_res["title"]
 
-        # 6) Append to Excel, XML, CSV
+        # 6) Append to Excel
         append_excel_row(wb, ws, row_data, args.output_excel)
-        append_xml_entry(args.output_xml, row_data)
-        append_csv_row(args.output_csv, row_data)
 
     driver.quit()
     logging.info("All done.")
-
     logging.info("If images appear 'floating' in Excel, note that Excel doesn't move images "
                  "when sorting rows. They are anchored to the cell, but not truly cell data.")
 

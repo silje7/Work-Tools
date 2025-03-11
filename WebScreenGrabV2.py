@@ -218,13 +218,23 @@ def test_protocol(driver, base_url, protocol, timeout):
 def init_excel(excel_filename):
     """
     If the Excel file does not exist, create it and write headers.
-    Otherwise, load it.
+    Otherwise, attempt to load it. If loading fails (e.g., the file is corrupted),
+    create a new workbook.
     Returns (workbook, worksheet).
     """
     if os.path.exists(excel_filename):
-        wb = load_workbook(excel_filename)
-        ws = wb.active
-        logging.info(f"Loaded existing Excel workbook: {excel_filename}")
+        try:
+            wb = load_workbook(excel_filename)
+            ws = wb.active
+            logging.info(f"Loaded existing Excel workbook: {excel_filename}")
+        except Exception as e:
+            logging.error(f"Error loading workbook {excel_filename}: {e}. Creating a new workbook.")
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "Results"
+            ws.append(EXCEL_COLUMNS)
+            wb.save(excel_filename)
+            logging.info(f"Created new Excel workbook: {excel_filename}")
     else:
         wb = Workbook()
         ws = wb.active

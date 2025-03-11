@@ -31,7 +31,6 @@ import time
 import urllib3
 import xml.etree.ElementTree as ET
 from time import sleep
-from io import BytesIO
 
 import requests
 from openpyxl import Workbook, load_workbook
@@ -69,14 +68,12 @@ EXCEL_COLUMNS = [
     "HTTP Remote Headers",
 ]
 
-# Global list to hold image references so they aren’t garbage-collected
-_image_refs = []
-
 
 def setup_driver(chrome_driver_path, timeout):
     """Initialize a headless Chrome driver with a given timeout."""
     options = Options()
-    options.headless = True  # Headless mode; for newer Chrome you might need: options.add_argument("--headless=new")
+    options.headless = True  # Headless mode
+    # If using newer Chrome, might need: options.add_argument("--headless=new")
     try:
         service = Service(executable_path=chrome_driver_path)
         driver = webdriver.Chrome(service=service, options=options)
@@ -121,7 +118,8 @@ def test_protocol(driver, base_url, protocol, timeout):
     # 1) Selenium load
     try:
         driver.get(full_url)
-        sleep(2)  # small wait to allow page to render
+        # small wait to allow page to render if needed
+        sleep(2)
         result["title"] = driver.title
         result["works"] = True
     except TimeoutException as te:
@@ -133,6 +131,7 @@ def test_protocol(driver, base_url, protocol, timeout):
     if result["works"]:
         try:
             screenshot_b64 = driver.get_screenshot_as_base64()
+            # Build a unique screenshot filename
             ts = int(time.time() * 1000)
             filename = os.path.join(
                 "screenshots",
@@ -184,16 +183,15 @@ def init_excel(excel_filename):
 def append_excel_row(wb, ws, row_data, excel_filename):
     """
     Append a single row to the Excel sheet with embedded screenshot,
-    auto-adjust cell widths, then save immediately.
-    Uses a BytesIO stream (with a global reference) to embed the image.
+    auto-width for that row’s cells, then save immediately.
     """
     row_num = ws.max_row + 1
 
-    # Populate cells (using specific columns for clarity)
+    # Put data in cells
     ws.cell(row=row_num, column=1, value=row_data["ip_host"])
     ws.cell(row=row_num, column=2, value=str(row_data["https_works"]))
     ws.cell(row=row_num, column=3, value=row_data["chosen_title"])
-    # Column 4 (for screenshot) will be handled separately
+    # column 4 (D) is for screenshot embedding
 
     ws.cell(row=row_num, column=5, value=row_data["https_title"])
     ws.cell(row=row_num, column=6, value=str(row_data["https_status_code"]))
@@ -211,36 +209,35 @@ def append_excel_row(wb, ws, row_data, excel_filename):
     ws.cell(row=row_num, column=17, value=row_data["http_remote_body"])
     ws.cell(row=row_num, column=18, value=row_data["http_remote_headers"])
 
-    # Embed screenshot in column 4 (D) if available
+    # Embed screenshot
     if row_data["screenshot_path"]:
         try:
-            with open(row_data["screenshot_path"], "rb") as f:
-                image_data = f.read()
-            image_stream = BytesIO(image_data)
-            image_stream.seek(0)
-            img = Image(image_stream)
-            # Keep a reference to the stream to avoid garbage collection
-            _image_refs.append(img)
+            img = Image(row_data["screenshot_path"])
+            # Optionally resize the embedded image:
             img.width = 320
             img.height = 240
-            cell_addr = f"D{row_num}"
+            cell_addr = f"D{row_num}"  # Column 4 is 'D'
             ws.add_image(img, cell_addr)
         except Exception as e:
             logging.error(f"Error embedding screenshot '{row_data['screenshot_path']}': {e}")
 
-    # Adjust cell alignment and column widths
+    # Wrap text for the newly added row, update column widths for that row
     for col_idx in range(1, len(EXCEL_COLUMNS) + 1):
         cell = ws.cell(row=row_num, column=col_idx)
         cell.alignment = Alignment(wrap_text=True)
+
+        # Attempt to expand column width if needed
+        val = str(cell.value) if cell.value else ""
         col_letter = get_column_letter(col_idx)
         current_width = ws.column_dimensions[col_letter].width or 10
-        needed_width = min(len(str(cell.value)) + 2, 100)
+        needed_width = min(len(val) + 2, 100)  # cap at 100
         if needed_width > current_width:
             ws.column_dimensions[col_letter].width = needed_width
 
     # Force the screenshot column (D) to be a bit wider
     ws.column_dimensions['D'].width = 45
 
+    # Save workbook
     wb.save(excel_filename)
 
 
@@ -257,7 +254,7 @@ def init_xml(xml_filename):
 
 def append_xml_entry(xml_filename, row_data):
     """
-    Load existing XML, append a single <Entry>, and save immediately.
+    Load existing XML, append a single <Entry>, save immediately.
     """
     tree = ET.parse(xml_filename)
     root = tree.getroot()
@@ -268,6 +265,7 @@ def append_xml_entry(xml_filename, row_data):
     ET.SubElement(entry, "Chosen_Title").text = row_data["chosen_title"]
     ET.SubElement(entry, "Screenshot_Path").text = row_data["screenshot_path"]
 
+    # HTTPS info
     https_elem = ET.SubElement(entry, "HTTPS_Info")
     ET.SubElement(https_elem, "Title").text = row_data["https_title"]
     ET.SubElement(https_elem, "Status_Code").text = str(row_data["https_status_code"])
@@ -277,6 +275,7 @@ def append_xml_entry(xml_filename, row_data):
     ET.SubElement(https_elem, "Remote_Body").text = row_data["https_remote_body"]
     ET.SubElement(https_elem, "Remote_Headers").text = row_data["https_remote_headers"]
 
+    # HTTP info
     http_elem = ET.SubElement(entry, "HTTP_Info")
     ET.SubElement(http_elem, "Title").text = row_data["http_title"]
     ET.SubElement(http_elem, "Status_Code").text = str(row_data["http_status_code"])
@@ -292,6 +291,7 @@ def append_xml_entry(xml_filename, row_data):
 def init_csv(csv_filename):
     """
     If CSV doesn't exist, create it and write the header row.
+    Otherwise do nothing.
     """
     if not os.path.exists(csv_filename):
         with open(csv_filename, "w", newline="", encoding="utf-8") as f:
@@ -302,7 +302,7 @@ def init_csv(csv_filename):
 
 def append_csv_row(csv_filename, row_data):
     """
-    Append one row to CSV (images are stored as path).
+    Append one row to CSV. We won't embed images in CSV (only store path).
     """
     with open(csv_filename, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -311,6 +311,7 @@ def append_csv_row(csv_filename, row_data):
             str(row_data["https_works"]),
             row_data["chosen_title"],
             row_data["screenshot_path"],
+
             row_data["https_title"],
             row_data["https_status_code"],
             row_data["https_content_length"],
@@ -318,6 +319,7 @@ def append_csv_row(csv_filename, row_data):
             row_data["https_cache_control"],
             row_data["https_remote_body"],
             row_data["https_remote_headers"],
+
             row_data["http_title"],
             row_data["http_status_code"],
             row_data["http_content_length"],
@@ -346,7 +348,7 @@ def main():
     try:
         with open(args.ip_file, "r", encoding="utf-8") as f:
             lines = [line.strip() for line in f if line.strip()]
-        unique_hosts = list(set(lines))
+        unique_hosts = list(set(lines))  # remove duplicates
         logging.info(f"Found {len(lines)} IP/host lines, deduplicated to {len(unique_hosts)} entries.")
     except Exception as e:
         logging.error(f"Error reading IP file: {e}")
@@ -398,6 +400,7 @@ def main():
             row_data["chosen_title"] = http_res["title"]
         else:
             row_data["screenshot_path"] = ""
+            # If neither protocol loaded in Selenium, fallback to whichever title we have
             row_data["chosen_title"] = https_res["title"] or http_res["title"]
 
         # Append to Excel, XML, CSV one entry at a time

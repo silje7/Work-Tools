@@ -1,23 +1,18 @@
 #!/usr/bin/env python
-"""
+r"""
 WebScreenGrab.py
 
 Usage:
     python WebScreenGrab.py ips.txt --local-chromedriver "C:\Users\V613867\Desktop\Projects\tools\chromedriver-win64\chromedriver.exe"
-    [--output-excel results.xlsx] [--output-xml results.xml] [--output-csv results.csv]
-    [--timeout 10] [--no-headless]
+    [--output-excel results.xlsx] [--timeout 10] [--no-headless]
 
 Description:
     Reads a list of IPs/hosts from a file, removing duplicates. For each host:
       - Pings the host to see if it's reachable. If not, skip.
       - Tries HTTP first, then HTTPS for verification.
       - Takes a screenshot (preferring the protocol that worked first) and collects metadata.
-      - Writes an Excel row (with embedded screenshot), an XML entry, and a CSV row
-        for each host in real-time. The script is headless by default.
-
-    The Excel file has a "Screenshot" column with an embedded PNG, plus "HTTPS Works",
-    "Title (Chosen Protocol)", and all metadata columns (HTTP/HTTPS). The script times out at 10s
-    by default (override with --timeout).
+      - Writes an Excel row (with embedded screenshot) for each host in real-time.
+      - The script is headless by default.
 
 Dependencies:
     pip install selenium requests openpyxl
@@ -25,7 +20,6 @@ Dependencies:
 
 import argparse
 import base64
-import csv
 import logging
 import os
 import socket
@@ -34,6 +28,7 @@ import sys
 import time
 from time import sleep
 import urllib3
+from io import BytesIO
 
 import requests
 from openpyxl import Workbook, load_workbook
@@ -248,25 +243,28 @@ def append_excel_row(wb, ws, row_data, excel_filename):
     """
     row_num = ws.max_row + 1
 
-    # Put data in the cells. We rely on the column name -> row_data key mapping.
+    # Populate cells based on column name -> row_data key mapping.
     for col_idx, col_name in enumerate(EXCEL_COLUMNS, start=1):
-        # Convert col_name to a dictionary key (lowercase, underscores instead of spaces)
         dict_key = col_name.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("-", "")
         val = row_data.get(dict_key, "")
         ws.cell(row=row_num, column=col_idx, value=val)
 
-    # If there's a screenshot, embed it in the "Screenshot" column (column 7)
+    # Embed the screenshot in the "Screenshot" column (column 7)
     screenshot_col_letter = get_column_letter(7)
     screenshot_path = row_data.get("screenshot_path", "")
     if screenshot_path:
         try:
-            img = Image(screenshot_path)
+            # Read image data into a BytesIO stream
+            with open(screenshot_path, "rb") as f:
+                image_data = f.read()
+            image_stream = BytesIO(image_data)
+            img = Image(image_stream)
             # Resize the embedded image to 320x240
             img.width = 320
             img.height = 240
             cell_addr = f"{screenshot_col_letter}{row_num}"
             ws.add_image(img, cell_addr)
-            # Center the image within the cell by setting cell alignment
+            # Center the image within the cell
             ws[cell_addr].alignment = Alignment(horizontal='center', vertical='center')
         except Exception as e:
             logging.error(f"Error embedding screenshot '{screenshot_path}': {e}")
@@ -277,10 +275,10 @@ def append_excel_row(wb, ws, row_data, excel_filename):
     # Set the screenshot column width (320 px ≈ 46 Excel units)
     ws.column_dimensions[screenshot_col_letter].width = 46
 
-    # Optionally set other columns to a reasonable width (e.g., Ip Address column)
+    # Optionally adjust other column widths (e.g., Ip Address column)
     ws.column_dimensions['A'].width = 20
 
-    # Save the workbook after each row
+    # Save the workbook after adding the row
     wb.save(excel_filename)
 
 
@@ -306,7 +304,7 @@ def main():
     try:
         with open(args.ip_file, "r", encoding="utf-8") as f:
             lines = [line.strip() for line in f if line.strip()]
-        unique_hosts = list(set(lines))  # remove duplicates
+        unique_hosts = list(set(lines))
         logging.info(f"Found {len(lines)} lines, deduplicated to {len(unique_hosts)} entries.")
     except Exception as e:
         logging.error(f"Error reading IP file: {e}")
@@ -324,39 +322,33 @@ def main():
 
     # Process each unique host
     for host in unique_hosts:
-        # 1) Check if host is reachable (ping)
         if not ping_host(host):
             logging.info(f"{host} is unreachable. Skipping.")
             continue
 
-        # 2) Quick check which protocol is likely open first
         probable_proto = check_ip_protocol(host)
         logging.info(f"{host} => probable protocol: {probable_proto}")
 
-        # 3) Try HTTP first, then HTTPS
+        # Try HTTP first, then HTTPS
         http_res = test_protocol(driver, host, "http://", args.timeout)
-
         if http_res["works"]:
             protocol_used = "HTTP"
-            # Then check HTTPS for verification
             https_res = test_protocol(driver, host, "https://", args.timeout)
             https_works = https_res["works"]
         else:
-            # If HTTP didn't work, try only HTTPS
             https_res = test_protocol(driver, host, "https://", args.timeout)
             protocol_used = "HTTPS" if https_res["works"] else "None"
             https_works = https_res["works"]
 
-        # 4) Construct a single row of data
+        # Build row data
         row_data = {
-            "ip_address": host,  # Updated key to match "Ip Address"
+            "ip_address": host,
             "dev_type": "",
             "note": "",
             "password": "",
             "https_works": https_works,
             "screenshot_path": "",
             "title_chosen_protocol": "",
-            # HTTPS columns
             "https_title": https_res["title"],
             "https_status_code": https_res["status_code"],
             "https_content_length": https_res["content_length"],
@@ -364,7 +356,6 @@ def main():
             "https_cachecontrol": https_res["cache_control"],
             "https_remote_body": https_res["remote_body"],
             "https_remote_headers": https_res["remote_headers"],
-            # HTTP columns
             "http_title": http_res["title"],
             "http_status_code": http_res["status_code"],
             "http_content_length": http_res["content_length"],
@@ -376,8 +367,7 @@ def main():
             "protocol_used": protocol_used
         }
 
-        # 5) Decide which screenshot to embed:
-        # Prefer the protocol that worked first (HTTP if it worked, else HTTPS)
+        # Decide which screenshot to embed (prefer HTTP if available)
         if http_res["works"] and http_res["screenshot_path"]:
             row_data["screenshot_path"] = http_res["screenshot_path"]
             row_data["title_chosen_protocol"] = http_res["title"]
@@ -388,14 +378,11 @@ def main():
             row_data["screenshot_path"] = ""
             row_data["title_chosen_protocol"] = http_res["title"] or https_res["title"]
 
-        # 6) Append to Excel
         append_excel_row(wb, ws, row_data, args.output_excel)
 
     driver.quit()
     logging.info("All done.")
-    logging.info("If images appear 'floating' in Excel, note that Excel doesn't move images "
-                 "when sorting rows. They are anchored to the cell, but not truly cell data.")
-
+    logging.info("If images appear 'floating' in Excel, note that Excel doesn't move images when sorting rows.")
 
 if __name__ == "__main__":
     main()

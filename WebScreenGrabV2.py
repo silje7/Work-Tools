@@ -32,9 +32,9 @@ import socket
 import subprocess
 import sys
 import time
+from time import sleep
 import urllib3
 import xml.etree.ElementTree as ET
-from time import sleep
 
 import requests
 from openpyxl import Workbook, load_workbook
@@ -134,10 +134,7 @@ def setup_driver(chrome_driver_path, timeout, headless=True):
     """
     options = Options()
     if headless:
-        # Use the "new" headless if your Chrome supports it, else just --headless
-        options.add_argument("--headless=new")  # or:
-        # options.add_argument("--headless")
-
+        options.add_argument("--headless")
     # Bypass/ignore SSL errors
     options.add_argument("--ignore-certificate-errors")
     options.add_argument("--allow-insecure-localhost")
@@ -253,39 +250,36 @@ def append_excel_row(wb, ws, row_data, excel_filename):
     """
     row_num = ws.max_row + 1
 
-    # Put data in the cells. We'll rely on the column name -> row_data key mapping
-    # but we added "Dev Type", "Note", "Password" with no script-provided values.
-    # They remain empty unless the user populates them manually later.
+    # Put data in the cells. We'll rely on the column name -> row_data key mapping.
     for col_idx, col_name in enumerate(EXCEL_COLUMNS, start=1):
-        # Convert col_name to a dictionary key (lower + underscores)
+        # Convert col_name to a dictionary key (lower + underscores, remove parentheses and dashes)
         dict_key = col_name.lower().replace(" ", "_").replace("(", "").replace(")", "").replace("-", "")
         val = row_data.get(dict_key, "")
         ws.cell(row=row_num, column=col_idx, value=val)
 
-    # If there's a screenshot, embed it in the "Screenshot" column (which is #7 in the list).
-    # Column 7 is "Screenshot" => column G in Excel (A=1,B=2,...,G=7).
-    screenshot_col_letter = get_column_letter(7)  # G
+    # If there's a screenshot, embed it in the "Screenshot" column (column 7, or "G")
+    screenshot_col_letter = get_column_letter(7)
     screenshot_path = row_data.get("screenshot_path", "")
     if screenshot_path:
         try:
             img = Image(screenshot_path)
-            # Resize the embedded image
+            # Resize the embedded image to 320x240
             img.width = 320
             img.height = 240
             cell_addr = f"{screenshot_col_letter}{row_num}"
             ws.add_image(img, cell_addr)
+            # Center the image within the cell by setting cell alignment
+            ws[cell_addr].alignment = Alignment(horizontal='center', vertical='center')
         except Exception as e:
             logging.error(f"Error embedding screenshot '{screenshot_path}': {e}")
 
-    # Try to set row height so the screenshot fits, ~ 240 px => ~ 180 points
-    # 1 point = 1/72 inch, typical screen ~ 96 dpi, so 240 px ~ 2.5 inches => 180 points
+    # Set row height so the screenshot fits (~240 px ≈ 180 points)
     ws.row_dimensions[row_num].height = 180
 
-    # Make the screenshot column wide enough
-    ws.column_dimensions[screenshot_col_letter].width = 45
+    # Set the screenshot column width (roughly calculated from image width; 320 px ≈ 46 Excel units)
+    ws.column_dimensions[screenshot_col_letter].width = 46
 
-    # Optionally set other columns to a reasonable width
-    # For example, IP/Host = col 1 => A
+    # Optionally set other columns to a reasonable width (e.g., IP/Host column)
     ws.column_dimensions['A'].width = 20
 
     # Save the workbook after each row
@@ -305,16 +299,15 @@ def init_xml(xml_filename):
 
 def append_xml_entry(xml_filename, row_data):
     """
-    Load existing XML, append a single <Entry>, save immediately.
-    We'll just store the dictionary values as subelements,
-    with the subelement tag as the dictionary key.
+    Load existing XML, append a single <Entry>, and save immediately.
+    Each key/value pair in row_data becomes a subelement.
     """
     tree = ET.parse(xml_filename)
     root = tree.getroot()
 
     entry = ET.SubElement(root, "Entry")
     for key, value in row_data.items():
-        # remove parentheses or spaces from the key to keep it simpler
+        # Remove problematic characters from the key for XML tags
         tag = key.replace("(", "").replace(")", "").replace(" ", "_")
         sub = ET.SubElement(entry, tag)
         sub.text = str(value)
@@ -335,7 +328,7 @@ def init_csv(csv_filename):
 
 def append_csv_row(csv_filename, row_data):
     """
-    Append one row to CSV. We won't embed images in CSV (only store path).
+    Append one row to CSV. We won't embed images in CSV (only store the path).
     """
     with open(csv_filename, "a", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
@@ -417,8 +410,8 @@ def main():
 
         # 4) Construct a single row of data
         row_data = {
-            "ip_host": host,
-            # The user will fill these next three in manually later if desired
+            "ip/host": host,  # key changed to match header "IP/Host"
+            # The user will fill these next three manually later if desired
             "dev_type": "",
             "note": "",
             "password": "",
@@ -446,8 +439,8 @@ def main():
             "protocol_used": protocol_used
         }
 
-        # 5) Decide which screenshot to embed
-        # prefer the protocol that actually worked first (HTTP if it worked, else HTTPS)
+        # 5) Decide which screenshot to embed:
+        # Prefer the protocol that worked first (HTTP if it worked, else HTTPS)
         if http_res["works"] and http_res["screenshot_path"]:
             row_data["screenshot_path"] = http_res["screenshot_path"]
             row_data["title_chosen_protocol"] = http_res["title"]

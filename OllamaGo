@@ -1,0 +1,134 @@
+https://github.com/ollama/ollama/releases/tag/v0.6.2
+https://github.com/ollama/ollama/releases/download/v0.6.2/ollama-windows-amd64.zip
+https://openwebui.com/m/zillomab/llama3-uncensored:latest
+
+OllamaSetup.exe /DIR="c:\teon_tools\ollama"
+
+ollama pull gemma3:1b-it-q8_0
+ollama pull nomic-embed-text:latest
+ollama pull llama3.2:1b-instruct-q3_K_M
+ollama pull llama3.2:1b-instruct-q2_K
+
+https://openwebui.com/f/pad4651/add_to_memories_action_button
+https://openwebui.com/f/omar97/visualize
+https://openwebui.com/f/etienneperot/run_code
+https://openwebui.com/f/nokodo/auto_memory
+https://openwebui.com/t/spyci/keyless_weather
+
+https://github.com/tcsenpai/spacellama
+Prompt: Help the user with creating diagrams based off the mermaid syntax. You can create diagrams based on provided mermaid code.',
+
+
+# Predict power outages datasets 
+https://engineering.purdue.edu/LASCI/research-data/outages
+https://github.com/lr580/power_outages_stats/blob/master/source/outage.xlsx
+
+
+
+
+##### SYSTEM FUNCTION TO CONSIDER.
+You are a forecasting function that processes historical outage data from two Excel files, merges them based on shared columns (such as YEAR, MONTH, U.S._STATE, POSTAL.CODE, NERC.REGION, and CLIMATE.REGION), and combines this with real‑time weather data provided by OpenWebUI’s weather tool. When a user provides an address, your function should:
+Geocode the address to extract location details.
+Query the current weather for that location.
+Filter and analyze the merged outage data for that geographic area.
+Predict the outage risk (e.g., “High” or “Low”) based on historical trends and current weather severity.
+Return a formatted professional response summarizing the forecast, including a disclaimer about the limitations of using historical data.
+#### END SYSTEM PROMPT
+
+#### Possible function 
+import pandas as pd
+
+def load_and_merge_outage_data(file1, file2):
+    # Read data from both Excel files (assuming sheet 'Masterdata')
+    df1 = pd.read_excel(file1, sheet_name='Masterdata')
+    df2 = pd.read_excel(file2, sheet_name='Masterdata')
+    
+    # Define common columns for merging
+    common_cols = ['YEAR', 'MONTH', 'U.S._STATE', 'POSTAL.CODE', 'NERC.REGION', 'CLIMATE.REGION']
+    
+    # Merge the two datasets (outer join to capture all data)
+    merged_df = pd.merge(df1, df2, on=common_cols, how='outer', suffixes=('_file1', '_file2'))
+    return merged_df
+
+def get_current_weather(address):
+    # Placeholder: integrate with OpenWebUI weather tool API to get weather report
+    # Example response structure:
+    weather_report = {
+        'description': 'Thunderstorms with heavy rain',
+        'temp': 65,
+        'severity': 'severe'  # values might be 'normal', 'severe', or 'extreme'
+    }
+    return weather_report
+
+def analyze_outage_risk(merged_data, location, weather):
+    # Filter historical data based on location (e.g., using the state)
+    state = location.get('state')
+    filtered_data = merged_data[merged_data['U.S._STATE'] == state]
+    
+    # Calculate an average anomaly level for context (if available)
+    avg_anomaly = filtered_data['ANOMALY.LEVEL'].mean() if 'ANOMALY.LEVEL' in filtered_data.columns else None
+
+    # Determine risk based on weather severity and historical anomaly
+    if weather.get('severity') in ['severe', 'extreme']:
+        risk = 'High'
+    else:
+        risk = 'Low'
+    
+    # Form a hypothesis: if high risk and severe weather then likely weather-driven,
+    # else if risk is low but outages are observed, suspect equipment or maintenance issues.
+    if risk == 'High':
+        hypothesis = "The outage is likely due to severe weather conditions."
+    else:
+        hypothesis = "The outage may be more related to equipment issues or building power maintenance."
+    
+    # Also, return additional relevant columns for context
+    additional_info = {
+        'average_anomaly_level': avg_anomaly,
+        'region': filtered_data['NERC.REGION'].iloc[0] if not filtered_data.empty else None,
+        'climate_region': filtered_data['CLIMATE.REGION'].iloc[0] if not filtered_data.empty else None,
+        # Additional columns can be added here as needed
+    }
+    
+    return risk, hypothesis, additional_info
+
+def format_response(location, weather, risk, hypothesis, additional_info):
+    # Create a professionally formatted response including additional columns and hypothesis
+    response = (
+        f"Forecast for {location.get('address')}:\n\n"
+        f"Current Weather: {weather.get('description')} with a temperature of {weather.get('temp')}°F.\n"
+        f"Predicted Outage Risk: {risk}\n\n"
+        f"Additional Context:\n"
+        f" - Average Historical Anomaly Level in {location.get('state')}: {additional_info.get('average_anomaly_level')}\n"
+        f" - NERC Region: {additional_info.get('region')}\n"
+        f" - Climate Region: {additional_info.get('climate_region')}\n\n"
+        f"Hypothesis: {hypothesis}\n\n"
+        "Note: This forecast is based on historical outage data combined with current weather conditions. "
+        "For an accurate diagnosis of the outage cause, please cross-check with real-time grid monitoring and maintenance logs."
+    )
+    return response
+
+def outage_forecast_system(address, file1='outage.xlsx', file2='outage (1).xlsx'):
+    # Merge historical outage data
+    merged_data = load_and_merge_outage_data(file1, file2)
+    
+    # Retrieve current weather data using OpenWebUI tool
+    weather = get_current_weather(address)
+    
+    # Use geocoding to extract details from the address (placeholder values here)
+    location = {
+        'address': address,
+        'state': 'Minnesota',  # In a real system, use a geocoder to extract state, zip, etc.
+    }
+    
+    # Analyze the risk, generate a hypothesis, and pull in additional data columns
+    risk, hypothesis, additional_info = analyze_outage_risk(merged_data, location, weather)
+    
+    # Format the final response
+    response = format_response(location, weather, risk, hypothesis, additional_info)
+    return response
+
+# Example usage:
+address_input = "123 Main St, Minneapolis, MN"
+print(outage_forecast_system(address_input))
+########
+

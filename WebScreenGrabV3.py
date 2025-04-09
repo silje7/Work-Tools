@@ -1,16 +1,14 @@
 #!/usr/bin/env python
 """
-WebScreenGrab.py - Optimized for processing ~1000 IPs at a time with headless mode
+webscreengrab.py - optimized for processing ~1000 ips at a time with headless mode
 
-Usage:
-    python WebScreenGrab.py ips.txt --local-chromedriver "C:\tools\chromedriver-win64\chromedriver.exe"
+usage:
+    python webscreengrab3.py ips.txt --local-chromedriver "c:\\users\\v613867\\desktop\\projects\\tools\\chromedriver-win64\\chromedriver.exe"
     [--output-excel results.xlsx] [--output-xml results.xml] [--output-csv results.csv] 
     [--output-json results.json] [--timeout 10] [--concurrent 3]
     [--cleanup-days 7] [--generate-summary] [--jitter 0.5] [--resume]
     [--output-dir output_folder]
-
-Dependencies:
-    pip install selenium requests openpyxl pandas
+...
 """
 
 import argparse
@@ -47,14 +45,6 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 
-# Disable InsecureRequestWarnings from requests
-urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-# Configure root logger to suppress SSL errors
-for logger_name in ['urllib3.connectionpool', 'selenium.webdriver.remote.remote_connection']:
-    ssl_logger = logging.getLogger(logger_name)
-    ssl_logger.setLevel(logging.ERROR)  # Only show errors, not warnings
-
 # Global control flag for clean shutdown
 running = True
 
@@ -67,6 +57,9 @@ processed_lock = Lock()
 
 # Global set for tracking processed IPs
 processed_ips = set()
+
+
+chrome_driver_path = r"c:\users\v613867\desktop\projects\tools\chromedriver-win64\chromedriver.exe" 
 
 # Global columns for Excel/CSV
 EXCEL_COLUMNS = [
@@ -137,7 +130,7 @@ def signal_handler(sig, frame):
 
 
 def create_requests_session(retries=3, backoff_factor=0.3, verify_ssl=False):
-    """Create a requests session with retry logic and SSL verification disabled."""
+    """Create a requests session with retry logic."""
     session = requests.Session()
     retry = Retry(
         total=retries,
@@ -150,14 +143,14 @@ def create_requests_session(retries=3, backoff_factor=0.3, verify_ssl=False):
     session.mount('http://', adapter)
     session.mount('https://', adapter)
     
-    # Force SSL verification to False regardless of the parameter
-    session.verify = False
+    # Use the verify_ssl parameter instead of forcing it to False
+    session.verify = verify_ssl
     
     return session
 
 
 def setup_driver(chrome_driver_path, timeout):
-    """Initialize a headless Chrome driver with SSL bypass."""
+    """Initialize a headless Chrome driver."""
     options = Options()
     # Run in headless mode
     options.headless = True
@@ -168,18 +161,6 @@ def setup_driver(chrome_driver_path, timeout):
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     
-    # Critical: Add these options to bypass SSL certificate warnings
-    options.add_argument('--ignore-certificate-errors')
-    options.add_argument('--ignore-ssl-errors')
-    options.add_argument('--allow-insecure-localhost')
-    options.add_argument('--allow-running-insecure-content')
-    options.add_argument('--disable-web-security')
-    options.add_argument('--log-level=3')  # Suppress console messages
-    
-    # Additional capability to accept insecure certs
-    options.add_experimental_option('excludeSwitches', ['enable-logging'])
-    options.accept_insecure_certs = True
-    
     try:
         service = Service(executable_path=chrome_driver_path)
         driver = webdriver.Chrome(service=service, options=options)
@@ -189,9 +170,6 @@ def setup_driver(chrome_driver_path, timeout):
         
         # Create a CDP session to handle JavaScript alerts and dialogs
         driver.execute_cdp_cmd('Page.setBypassCSP', {'enabled': True})
-        
-        # Handle browser capabilities for safety warnings
-        driver.execute_cdp_cmd('Security.setIgnoreCertificateErrors', {'ignore': True})
         
         return driver
     except Exception as e:
@@ -322,22 +300,19 @@ def test_protocol(driver, base_url, protocol, timeout, session, worker_id=0):
                         sleep(0.5)
                     except:
                         pass
-        except Exception:
-            # Silently continue if the bypass fails - don't add to logs
-            pass
+        except Exception as e:
+            logging.warning(f"Worker {worker_id}: Error handling security bypass: {str(e)}")
             
         # Continue normal page loading
         sleep(2)
         result["title"] = driver.title
         result["works"] = True
-    except TimeoutException:
-        # Silently log timeout without details to reduce log spam
-        logging.debug(f"Worker {worker_id}: Timeout loading {full_url}")
-    except WebDriverException:
-        # Silently log WebDriver errors without details to reduce log spam
-        logging.debug(f"Worker {worker_id}: WebDriver error loading {full_url}")
+    except TimeoutException as te:
+        logging.warning(f"Worker {worker_id}: Timeout loading {full_url}: {str(te)}")
+    except WebDriverException as we:
+        logging.warning(f"Worker {worker_id}: WebDriver error loading {full_url}: {str(we)}")
     except Exception as e:
-        logging.error(f"Worker {worker_id}: Error loading {full_url}: {str(e)[:100]}")
+        logging.error(f"Worker {worker_id}: Error loading {full_url}: {str(e)}")
 
     # 2) Screenshot if Selenium worked or if it's a security warning
     if result["works"] or "Your connection is not private" in driver.page_source:
@@ -358,7 +333,7 @@ def test_protocol(driver, base_url, protocol, timeout, session, worker_id=0):
             result["screenshot_path"] = filename
             logging.info(f"Worker {worker_id}: Screenshot saved to {filename}")
         except Exception as e:
-            logging.error(f"Worker {worker_id}: Error taking screenshot for {full_url}: {str(e)[:100]}")
+            logging.error(f"Worker {worker_id}: Error taking screenshot for {full_url}: {str(e)}")
 
     # 3) Requests-based metadata with progressive timeout handling
     start_time = time.time()
@@ -381,12 +356,11 @@ def test_protocol(driver, base_url, protocol, timeout, session, worker_id=0):
             
             # If HEAD works, then try slower GET with full timeout
             r = session.get(full_url, timeout=timeout)
-        except Exception:
-            # Even HEAD failed, site might be very slow or down - silently continue
-            logging.debug(f"Worker {worker_id}: Progressive connection to {full_url} failed")
-    except Exception:
-        # Silently log generic request errors to reduce spam
-        logging.debug(f"Worker {worker_id}: Error during initial request for {full_url}")
+        except Exception as e:
+            # Even HEAD failed, site might be very slow or down
+            logging.warning(f"Worker {worker_id}: Progressive connection to {full_url} failed: {str(e)}")
+    except Exception as e:
+        logging.warning(f"Worker {worker_id}: Error during initial request for {full_url}: {str(e)}")
     
     # Calculate actual response time
     response_time = time.time() - start_time
@@ -410,7 +384,7 @@ def test_protocol(driver, base_url, protocol, timeout, session, worker_id=0):
             # Identify BMS system
             result["bms_type"] = identify_bms_system(result["title"], result["remote_body"], result["remote_headers"])
         except Exception as e:
-            logging.error(f"Worker {worker_id}: Error processing response for {full_url}: {str(e)[:100]}")
+            logging.error(f"Worker {worker_id}: Error processing response for {full_url}: {str(e)}")
 
     return result
 
@@ -536,7 +510,7 @@ def append_excel_row(wb, ws, row_data, excel_filename, output_dir):
                 ws.column_dimensions['G'].width = max(col_width, 50)  # Minimum 50 width units
                 
             except Exception as e:
-                logging.error(f"Error embedding screenshot '{row_data['screenshot_path']}': {str(e)[:100]}")
+                logging.error(f"Error embedding screenshot '{row_data['screenshot_path']}': {str(e)}")
 
         # Wrap text for all cells
         for col_idx in range(1, len(EXCEL_COLUMNS) + 1):
@@ -753,7 +727,7 @@ def cleanup_old_screenshots(max_age_days=7, output_dir='.'):
                 os.remove(filepath)
                 count_removed += 1
             except Exception as e:
-                logging.error(f"Failed to remove {filepath}: {str(e)[:100]}")
+                logging.error(f"Failed to remove {filepath}: {str(e)}")
     
     if count_removed > 0:
         logging.info(f"Cleaned up {count_removed} old screenshots.")
@@ -770,7 +744,7 @@ def load_processed_ips(progress_file):
         with open(progress_file, "r", encoding="utf-8") as f:
             return set(line.strip() for line in f if line.strip())
     except Exception as e:
-        logging.error(f"Error loading processed IPs: {str(e)[:100]}")
+        logging.error(f"Error loading processed IPs: {str(e)}")
         return set()
 
 
@@ -783,7 +757,7 @@ def save_processed_ip(progress_file, ip):
             with open(progress_file, "a", encoding="utf-8") as f:
                 f.write(f"{ip}\n")
         except Exception as e:
-            logging.error(f"Error saving processed IP: {str(e)[:100]}")
+            logging.error(f"Error saving processed IP: {str(e)}")
 
 
 def generate_bms_summary(excel_filename, json_filename, output_dir):
@@ -848,7 +822,7 @@ def generate_bms_summary(excel_filename, json_filename, output_dir):
             json.dump(json_data, f, indent=2)
         
     except Exception as e:
-        logging.error(f"Error generating BMS summary: {str(e)[:100]}")
+        logging.error(f"Error generating BMS summary: {str(e)}")
 
 
 def process_host(host, chrome_driver_path, timeout, verify_ssl, excel_filename, xml_filename, csv_filename, 
@@ -955,7 +929,7 @@ def process_host(host, chrome_driver_path, timeout, verify_ssl, excel_filename, 
         return row_data
         
     except Exception as e:
-        logging.error(f"Worker {worker_id}: Error processing host {host}: {str(e)[:100]}")
+        logging.error(f"Worker {worker_id}: Error processing host {host}: {str(e)}")
         return {"ip_host": host, "error": str(e)}
     finally:
         # Ensure driver is properly closed to free memory
@@ -987,8 +961,8 @@ def main():
     parser.add_argument("--output-json", default="results.json", help="Filename for the JSON output")
     parser.add_argument("--timeout", type=int, default=10, help="Timeout in seconds for page loads/HTTP requests")
     parser.add_argument("--verify-ssl", action="store_true", help="Verify SSL certificates (disabled by default)")
-    parser.add_argument("--concurrent", type=int, default=3, help="Number of concurrent workers")
-    parser.add_argument("--cleanup-days", type=int, default=7, help="Days to keep screenshots (0 to disable cleanup)")
+    parser.add_argument("--concurrent", type=int, default=4, help="Number of concurrent workers")
+    parser.add_argument("--cleanup-days", type=int, default=0, help="Days to keep screenshots (0 to disable cleanup)")
     parser.add_argument("--generate-summary", action="store_true", help="Generate BMS summary report after scanning")
     parser.add_argument("--jitter", type=float, default=0.5, help="Random delay (0-N seconds) between hosts")
     
@@ -1026,7 +1000,7 @@ def main():
         unique_hosts = list(set(lines))  # remove duplicates
         logging.info(f"Found {len(lines)} IP/host lines, deduplicated to {len(unique_hosts)} entries.")
     except Exception as e:
-        logging.error(f"Error reading IP file: {str(e)[:100]}")
+        logging.error(f"Error reading IP file: {str(e)}")
         sys.exit(1)
     
     # Load already processed IPs if resume is enabled
@@ -1128,7 +1102,7 @@ def main():
             try:
                 # Apply jitter between hosts if enabled
                 if args.jitter > 0 and i > 0:  # Skip delay for first host
-                    delay = random.uniform(0, args.jitter)
+                    delay = random.uniform(0, jitter)
                     logging.debug(f"Applying jitter delay of {delay:.2f}s before processing {host}")
                     time.sleep(delay)
                 
@@ -1160,7 +1134,7 @@ def main():
                                 f"({processed_count/len(hosts_to_process)*100:.1f}%), "
                                 f"rate: {ips_per_second:.2f} IPs/second, ETA: {eta_str}")
             except Exception as e:
-                logging.error(f"Error processing host {host}: {str(e)[:100]}")
+                logging.error(f"Error processing host {host}: {str(e)}")
     else:
         logging.info("No new hosts to process.")
 

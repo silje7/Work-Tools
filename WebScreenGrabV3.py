@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 webscreengrab.py - optimized for processing IPs with minimal storage requirements
-
+python webscreengrab4.py ips.txt --local-chromedriver "path/to/chromedriver.exe"  --max-content-size 500 --screenshot-quality 40 --use-jpg-screenshots --store-headers essential --store-minimal-json --minify-json1
 USAGE EXAMPLES:
 
 1. Normal scan with optimized file size:

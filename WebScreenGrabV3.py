@@ -1,40 +1,23 @@
 #!/usr/bin/env python
 """
-webscreengrab.py - optimized for processing ~1000 IPs at a time with headless mode
+webscreengrab.py - optimized for processing IPs with minimal storage requirements
 
 USAGE EXAMPLES:
 
-1. Normal scan with summary generation:
-   python webscreengrab.py ips.txt --local-chromedriver "c:\\path\\to\\chromedriver.exe" --generate-summary
+1. Normal scan with optimized file size:
+   python webscreengrab.py ips.txt --local-chromedriver "c:\\path\\to\\chromedriver.exe" --max-content-size 500 --screenshot-quality 40
 
-2. Generate summary from a single existing Excel file (without scanning):
+2. Scan without screenshots to minimize file size:
+   python webscreengrab.py ips.txt --local-chromedriver "c:\\path\\to\\chromedriver.exe" --no-screenshots
+
+3. Generate summary from a single existing Excel file:
    python webscreengrab.py dummy.txt --local-chromedriver "c:\\path\\to\\chromedriver.exe" --summary-only --output-excel results.xlsx
    
-3. Generate summary from multiple Excel files:
+4. Generate summary from multiple Excel files:
    python webscreengrab.py dummy.txt --local-chromedriver "c:\\path\\to\\chromedriver.exe" --summary-only --input-excel-files resultsA.xlsx resultsB.xlsx
    
-4. Generate summary from all Excel files in a directory:
+5. Generate summary from all Excel files in a directory:
    python webscreengrab.py dummy.txt --local-chromedriver "c:\\path\\to\\chromedriver.exe" --summary-only --input-excel-dir /path/to/results_directory
-
-Command-line arguments:
-  ip_file              Path to the file containing IP addresses/hosts (one per line)
-  --local-chromedriver Path to the local chromedriver executable
-  --output-excel       Filename for the Excel output (default: results.xlsx)
-  --output-xml         Filename for the XML output (default: results.xml)
-  --output-csv         Filename for the CSV output (default: results.csv)
-  --output-json        Filename for the JSON output (default: results.json)
-  --timeout            Timeout in seconds for page loads/HTTP requests (default: 10)
-  --verify-ssl         Verify SSL certificates (disabled by default)
-  --concurrent         Number of concurrent workers (default: 4)
-  --cleanup-days       Days to keep screenshots, 0 to disable cleanup (default: 0)
-  --generate-summary   Generate BMS summary report after scanning
-  --jitter             Random delay between hosts in seconds (default: 0.5)
-  --resume             Enable resume capability (track processed IPs)
-  --progress-file      File to save/load processed IPs (default: processed_ips.txt)
-  --output-dir         Directory where output files will be stored (default: .)
-  --summary-only       Only generate summary from existing Excel file(s) without scanning
-  --input-excel-files  List of Excel files to include in summary (only with --summary-only)
-  --input-excel-dir    Directory containing Excel files to process (only with --summary-only)
 """
 
 import argparse
@@ -52,19 +35,26 @@ import time
 import urllib3
 import xml.etree.ElementTree as ET
 import signal
+import zlib
 from collections import Counter
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor
 from threading import Lock
 from time import sleep
 
+try:
+    from PIL import Image
+except ImportError:
+    logging.warning("PIL/Pillow not installed. Image optimization will be limited.")
+    Image = None
+
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from openpyxl import Workbook, load_workbook
-from openpyxl.drawing.image import Image
+from openpyxl.drawing.image import Image as XLImage
 from openpyxl.utils import get_column_letter
-from openpyxl.styles import Alignment, PatternFill, Font
+from openpyxl.styles import Alignment, PatternFill, Font, NamedStyle
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.chrome.options import Options
@@ -172,7 +162,7 @@ def create_requests_session(retries=3, backoff_factor=0.3, verify_ssl=False):
     return session
 
 
-def setup_driver(chrome_driver_path, timeout):
+def setup_driver(chrome_driver_path, timeout, window_size=None):
     """Initialize a headless Chrome driver."""
     options = Options()
     # Run in headless mode
@@ -180,7 +170,12 @@ def setup_driver(chrome_driver_path, timeout):
     options.add_argument("--headless=new")  # For newer Chrome versions
     
     # Window size for headless browser
-    options.add_argument("--window-size=1920,1080")
+    if window_size:
+        width, height = window_size
+        options.add_argument(f"--window-size={width},{height}")
+    else:
+        options.add_argument("--window-size=1280,720")  # Reduced from 1920x1080 for smaller screenshots
+    
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     
@@ -266,6 +261,36 @@ def identify_bms_system(title, body, headers):
     return "Unknown"
 
 
+def compress_string(text):
+    """Compress long strings to save space."""
+    if not text or len(text) < 1000:  # Don't compress short strings
+        return text
+    
+    try:
+        compressed = zlib.compress(text.encode('utf-8'))
+        return base64.b64encode(compressed).decode('ascii')
+    except Exception as e:
+        logging.warning(f"Error compressing string: {e}")
+        return text
+
+
+def decompress_string(compressed_text):
+    """Decompress string that was compressed with compress_string."""
+    if not compressed_text:
+        return ""
+    
+    try:
+        # Check if it's a compressed string
+        if compressed_text.startswith('eJw'):  # Common prefix for base64 encoded zlib data
+            decoded = base64.b64decode(compressed_text)
+            return zlib.decompress(decoded).decode('utf-8')
+        else:
+            return compressed_text  # Return as is if not compressed
+    except Exception as e:
+        logging.warning(f"Error decompressing string: {e}")
+        return compressed_text
+
+
 def test_protocol(driver, base_url, protocol, timeout, session, worker_id=0):
     """
     Attempt to load the given host+protocol in Selenium, take a screenshot,
@@ -327,7 +352,7 @@ def test_protocol(driver, base_url, protocol, timeout, session, worker_id=0):
             logging.warning(f"Worker {worker_id}: Error handling security bypass: {str(e)}")
             
         # Continue normal page loading
-        sleep(2)
+        sleep(1)  # Reduced from 2 seconds to 1 second for faster processing
         result["title"] = driver.title
         result["works"] = True
     except TimeoutException as te:
@@ -338,21 +363,51 @@ def test_protocol(driver, base_url, protocol, timeout, session, worker_id=0):
         logging.error(f"Worker {worker_id}: Error loading {full_url}: {str(e)}")
 
     # 2) Screenshot if Selenium worked or if it's a security warning
-    if result["works"] or "Your connection is not private" in driver.page_source:
+    if (result["works"] or "Your connection is not private" in driver.page_source) and not args.no_screenshots:
         try:
+            # For smaller file sizes, resize the window before taking screenshot if needed
+            if args.screenshot_max_size > 0:
+                current_size = driver.get_window_size()
+                # Only resize if current size is larger than max
+                if current_size['width'] > args.screenshot_max_size or current_size['height'] > args.screenshot_max_size:
+                    # Maintain aspect ratio
+                    if current_size['width'] > current_size['height']:
+                        new_width = args.screenshot_max_size
+                        new_height = int(current_size['height'] * (args.screenshot_max_size / current_size['width']))
+                    else:
+                        new_height = args.screenshot_max_size
+                        new_width = int(current_size['width'] * (args.screenshot_max_size / current_size['height']))
+                    
+                    driver.set_window_size(new_width, new_height)
+                    # Brief pause to allow resize
+                    sleep(0.2)
+            
             screenshot_b64 = driver.get_screenshot_as_base64()
             # Build a unique screenshot filename
             ts = int(time.time() * 1000)
             protocol_name = protocol.replace('://', '')
             sanitized_host = re.sub(r'[^\w\-\.]', '_', base_url)
+            
+            # Determine file extension based on optimization options
+            img_ext = "jpg" if args.use_jpg_screenshots else "png"
+            
             filename = os.path.join(
                 args.output_dir, 
                 "screenshots",
-                f"{protocol_name}_{sanitized_host}_{ts}.png"
+                f"{protocol_name}_{sanitized_host}_{ts}.{img_ext}"
             )
             os.makedirs(os.path.dirname(filename), exist_ok=True)
-            with open(filename, "wb") as f:
-                f.write(base64.b64decode(screenshot_b64))
+            
+            # Optimize the image if PIL is available
+            if Image and args.use_jpg_screenshots:
+                img_data = base64.b64decode(screenshot_b64)
+                img = Image.open(io.BytesIO(img_data))
+                img.save(filename, "JPEG", quality=args.screenshot_quality, optimize=True)
+            else:
+                # Fallback to basic PNG if PIL not available or JPG not selected
+                with open(filename, "wb") as f:
+                    f.write(base64.b64decode(screenshot_b64))
+                
             result["screenshot_path"] = filename
             logging.info(f"Worker {worker_id}: Screenshot saved to {filename}")
         except Exception as e:
@@ -397,19 +452,54 @@ def test_protocol(driver, base_url, protocol, timeout, session, worker_id=0):
     if r is not None:
         try:
             result["status_code"] = r.status_code
-            result["content_length"] = r.headers.get("Content-Length", "")
-            result["content_type"] = r.headers.get("Content-Type", "")
-            result["cache_control"] = r.headers.get("cache-control", "")
-            # Limit the remote body size to avoid excessive memory usage
-            result["remote_body"] = r.text[:20000]  # First 20KB is enough for BMS detection
-            result["remote_headers"] = str(r.headers)
             
-            # Identify BMS system
-            result["bms_type"] = identify_bms_system(result["title"], result["remote_body"], result["remote_headers"])
+            # Store headers based on user preference
+            if args.store_headers == "all":
+                result["content_length"] = r.headers.get("Content-Length", "")
+                result["content_type"] = r.headers.get("Content-Type", "")
+                result["cache_control"] = r.headers.get("cache-control", "")
+                result["remote_headers"] = str(r.headers)
+            elif args.store_headers == "essential":
+                result["content_length"] = r.headers.get("Content-Length", "")
+                result["content_type"] = r.headers.get("Content-Type", "")
+                result["cache_control"] = ""
+                result["remote_headers"] = ""
+            else:  # "none"
+                result["content_length"] = ""
+                result["content_type"] = ""
+                result["cache_control"] = ""
+                result["remote_headers"] = ""
+            
+            # Limit remote body size based on user preference
+            if args.max_content_size > 0:
+                result["remote_body"] = r.text[:args.max_content_size]
+                # Compress if enabled and content is large
+                if args.compression and len(result["remote_body"]) > 1000:
+                    result["remote_body"] = compress_string(result["remote_body"])
+            else:
+                result["remote_body"] = ""
+            
+            # Identify BMS system with available data
+            result["bms_type"] = identify_bms_system(
+                result["title"], 
+                result["remote_body"] if not args.compression else decompress_string(result["remote_body"]), 
+                result["remote_headers"]
+            )
         except Exception as e:
             logging.error(f"Worker {worker_id}: Error processing response for {full_url}: {str(e)}")
 
     return result
+
+
+def create_hyperlink_style(wb):
+    """Create and return a hyperlink style for Excel."""
+    hyperlink_style = NamedStyle(name="Hyperlink")
+    hyperlink_style.font = Font(color="0563C1", underline="single")
+    
+    if "Hyperlink" not in wb.named_styles:
+        wb.add_named_style(hyperlink_style)
+    
+    return hyperlink_style
 
 
 def init_excel(excel_filename, output_dir):
@@ -446,13 +536,16 @@ def init_excel(excel_filename, output_dir):
             for col_idx, header in enumerate(EXCEL_COLUMNS, 1):
                 col_letter = get_column_letter(col_idx)
                 if header == "Screenshot":
-                    ws.column_dimensions[col_letter].width = 50  # Screenshot column
+                    ws.column_dimensions[col_letter].width = 20  # Reduced from 50
                 elif header in ["IP/Host", "Title (Chosen Protocol)", "BMS Type"]:
-                    ws.column_dimensions[col_letter].width = 30  # Important text columns
+                    ws.column_dimensions[col_letter].width = 25  # Reduced from 30
                 elif "Remote Body" in header:
-                    ws.column_dimensions[col_letter].width = 20  # Body content
+                    ws.column_dimensions[col_letter].width = 15  # Reduced from 20
                 else:
-                    ws.column_dimensions[col_letter].width = 15  # Other columns
+                    ws.column_dimensions[col_letter].width = 12  # Reduced from 15
+            
+            # Create hyperlink style
+            create_hyperlink_style(wb)
             
             wb.save(full_path)
             logging.info(f"Created new Excel workbook: {full_path}")
@@ -461,8 +554,7 @@ def init_excel(excel_filename, output_dir):
 
 def append_excel_row(wb, ws, row_data, excel_filename, output_dir):
     """
-    Append a single row to the Excel sheet with embedded screenshot,
-    auto-width for that row's cells, then save immediately.
+    Append a single row to the Excel sheet with optimized screenshot handling.
     """
     with excel_lock:
         row_num = ws.max_row + 1
@@ -475,7 +567,7 @@ def append_excel_row(wb, ws, row_data, excel_filename, output_dir):
         ws.cell(row=row_num, column=4, value=row_data["chosen_title"])
         ws.cell(row=row_num, column=5, value=row_data["bms_type"])
         ws.cell(row=row_num, column=6, value=row_data["response_time"])
-        # column 7 (G) is for screenshot embedding
+        # column 7 (G) is for screenshot
 
         ws.cell(row=row_num, column=8, value=row_data["https_title"])
         ws.cell(row=row_num, column=9, value=str(row_data["https_status_code"]))
@@ -498,44 +590,51 @@ def append_excel_row(wb, ws, row_data, excel_filename, output_dir):
                 cell = ws.cell(row=row_num, column=col_idx)
                 cell.fill = light_fill
 
-        # Embed screenshot with proper sizing
-        if row_data["screenshot_path"]:
+        # Handle screenshots based on configuration
+        if row_data["screenshot_path"] and not args.screenshots_external:
             try:
-                img = Image(row_data["screenshot_path"])
-                
-                # Set maximum dimensions while maintaining aspect ratio
-                max_width = 600
-                max_height = 450
-                
-                # Calculate aspect ratio
-                aspect_ratio = img.width / img.height
-                
-                # Resize based on aspect ratio
-                if img.width > max_width or img.height > max_height:
+                if os.path.exists(row_data["screenshot_path"]):
+                    img = XLImage(row_data["screenshot_path"])
+                    
+                    # Set optimal dimensions based on screenshot size and quality settings
+                    max_width = args.screenshot_max_size if args.screenshot_max_size > 0 else 300
+                    max_height = int(max_width * 0.75)
+                    
+                    # Calculate aspect ratio and resize accordingly
+                    aspect_ratio = img.width / img.height if img.height > 0 else 1.33
+                    
                     if aspect_ratio > 1:  # Wider than tall
                         img.width = max_width
                         img.height = int(max_width / aspect_ratio)
                     else:  # Taller than wide
                         img.height = max_height
                         img.width = int(max_height * aspect_ratio)
-                
-                # Add image to cell G (column 7)
-                cell_addr = f"G{row_num}"
-                ws.add_image(img, cell_addr)
-                
-                # Set row height to accommodate image (with some padding)
-                # Google Sheets compatibility: ensure row is tall enough
-                row_height = img.height * 0.75  # Convert pixels to points (approximate)
-                ws.row_dimensions[row_num].height = max(row_height, 180)  # Minimum 180 points
-                
-                # Make sure column G is wide enough
-                col_width = img.width * 0.14  # Convert pixels to Excel column width units
-                ws.column_dimensions['G'].width = max(col_width, 50)  # Minimum 50 width units
-                
+                    
+                    # Add image to cell G (column 7)
+                    cell_addr = f"G{row_num}"
+                    ws.add_image(img, cell_addr)
+                    
+                    # Set row height with minimal padding
+                    row_height = img.height * 0.75  # Convert pixels to points (approximate)
+                    ws.row_dimensions[row_num].height = max(row_height, 120)  # Reduced from 180
+                    
+                    # Keep column G narrow
+                    col_width = img.width * 0.14  # Convert pixels to Excel column width units
+                    ws.column_dimensions['G'].width = max(col_width, 20)  # Reduced from 50
             except Exception as e:
                 logging.error(f"Error embedding screenshot '{row_data['screenshot_path']}': {str(e)}")
+        elif row_data["screenshot_path"] and args.screenshots_external:
+            # Create hyperlink to external screenshot
+            try:
+                cell = ws.cell(row=row_num, column=7)
+                rel_path = os.path.relpath(row_data["screenshot_path"], os.path.dirname(full_path))
+                cell.hyperlink = rel_path
+                cell.value = "View Screenshot"
+                cell.style = "Hyperlink"
+            except Exception as e:
+                logging.error(f"Error creating screenshot hyperlink: {str(e)}")
 
-        # Wrap text for all cells
+        # Wrap text for all cells but use minimal height
         for col_idx in range(1, len(EXCEL_COLUMNS) + 1):
             cell = ws.cell(row=row_num, column=col_idx)
             cell.alignment = Alignment(wrap_text=True, vertical="top")
@@ -590,23 +689,35 @@ def append_xml_entry(xml_filename, row_data, output_dir):
         ET.SubElement(entry, "Response_Time").text = str(row_data["response_time"])
         ET.SubElement(entry, "Screenshot_Path").text = row_data["screenshot_path"]
 
-        # HTTPS info
+        # HTTPS info - limit data based on storage settings
         https_elem = ET.SubElement(entry, "HTTPS_Info")
         ET.SubElement(https_elem, "Title").text = row_data["https_title"]
         ET.SubElement(https_elem, "Status_Code").text = str(row_data["https_status_code"])
-        ET.SubElement(https_elem, "Content_Length").text = row_data["https_content_length"]
-        ET.SubElement(https_elem, "Content_Type").text = row_data["https_content_type"]
-        ET.SubElement(https_elem, "Cache_Control").text = row_data["https_cache_control"]
-        ET.SubElement(https_elem, "Remote_Headers").text = row_data["https_remote_headers"]
+        
+        # Only include non-empty values
+        if row_data["https_content_length"]:
+            ET.SubElement(https_elem, "Content_Length").text = row_data["https_content_length"]
+        if row_data["https_content_type"]:
+            ET.SubElement(https_elem, "Content_Type").text = row_data["https_content_type"]
+        if row_data["https_cache_control"]:
+            ET.SubElement(https_elem, "Cache_Control").text = row_data["https_cache_control"]
+        if row_data["https_remote_headers"]:
+            ET.SubElement(https_elem, "Remote_Headers").text = row_data["https_remote_headers"]
 
-        # HTTP info
+        # HTTP info - limit data based on storage settings
         http_elem = ET.SubElement(entry, "HTTP_Info")
         ET.SubElement(http_elem, "Title").text = row_data["http_title"]
         ET.SubElement(http_elem, "Status_Code").text = str(row_data["http_status_code"])
-        ET.SubElement(http_elem, "Content_Length").text = row_data["http_content_length"]
-        ET.SubElement(http_elem, "Content_Type").text = row_data["http_content_type"]
-        ET.SubElement(http_elem, "Cache_Control").text = row_data["http_cache_control"]
-        ET.SubElement(http_elem, "Remote_Headers").text = row_data["http_remote_headers"]
+        
+        # Only include non-empty values
+        if row_data["http_content_length"]:
+            ET.SubElement(http_elem, "Content_Length").text = row_data["http_content_length"]
+        if row_data["http_content_type"]:
+            ET.SubElement(http_elem, "Content_Type").text = row_data["http_content_type"]
+        if row_data["http_cache_control"]:
+            ET.SubElement(http_elem, "Cache_Control").text = row_data["http_cache_control"]
+        if row_data["http_remote_headers"]:
+            ET.SubElement(http_elem, "Remote_Headers").text = row_data["http_remote_headers"]
 
         # Save with atomic write pattern to prevent corruption
         temp_file = f"{full_path}.tmp"
@@ -697,6 +808,7 @@ def append_json_entry(json_filename, row_data, output_dir):
                 "results": []
             }
         
+        # Create a minimal entry with only essential data
         entry = {
             "ip_host": row_data["ip_host"],
             "https_works": row_data["https_works"],
@@ -704,16 +816,34 @@ def append_json_entry(json_filename, row_data, output_dir):
             "chosen_title": row_data["chosen_title"],
             "bms_type": row_data["bms_type"],
             "response_time": row_data["response_time"],
-            "screenshot_path": row_data["screenshot_path"],
-            "https": {
+        }
+        
+        # Add screenshot path if it exists and not in external mode
+        if row_data["screenshot_path"] and not args.screenshots_external:
+            entry["screenshot_path"] = row_data["screenshot_path"]
+        
+        # Add protocol-specific data only if needed
+        if args.store_minimal_json:
+            # Only store essential protocol data
+            entry["https"] = {
+                "title": row_data["https_title"],
+                "status_code": row_data["https_status_code"]
+            }
+            entry["http"] = {
+                "title": row_data["http_title"],
+                "status_code": row_data["http_status_code"]
+            }
+        else:
+            # Store full protocol data
+            entry["https"] = {
                 "title": row_data["https_title"],
                 "status_code": row_data["https_status_code"],
                 "content_length": row_data["https_content_length"],
                 "content_type": row_data["https_content_type"],
                 "cache_control": row_data["https_cache_control"],
                 "headers": row_data["https_remote_headers"]
-            },
-            "http": {
+            }
+            entry["http"] = {
                 "title": row_data["http_title"],
                 "status_code": row_data["http_status_code"],
                 "content_length": row_data["http_content_length"],
@@ -721,14 +851,16 @@ def append_json_entry(json_filename, row_data, output_dir):
                 "cache_control": row_data["http_cache_control"],
                 "headers": row_data["http_remote_headers"]
             }
-        }
         
         data["results"].append(entry)
         
         # Save with atomic write pattern to prevent corruption
         temp_file = f"{full_path}.tmp"
         with open(temp_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+            if args.minify_json:
+                json.dump(data, f, separators=(',', ':'))  # Minified JSON
+            else:
+                json.dump(data, f, indent=2)  # Pretty JSON
         
         # Rename is atomic on most filesystems
         os.replace(temp_file, full_path)
@@ -1076,9 +1208,12 @@ def generate_multi_file_summary(excel_files, json_filename, output_dir):
             
             json_data["multi_file_summary"]["per_file_summary"].append(file_summary)
         
-        # Save the JSON file
+        # Save the JSON file with minification if enabled
         with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(json_data, f, indent=2)
+            if args.minify_json:
+                json.dump(json_data, f, separators=(',', ':'))  # Minified JSON
+            else:
+                json.dump(json_data, f, indent=2)  # Pretty JSON
             
     except Exception as e:
         logging.error(f"Error updating JSON with multi-file summary: {str(e)}")
@@ -1226,9 +1361,12 @@ def generate_bms_summary(excel_filename, json_filename, output_dir):
             
             json_data["summary"]["per_sheet_summary"].append(sheet_summary)
         
-        # Save the JSON file
+        # Save the JSON file with minification if enabled
         with open(json_path, "w", encoding="utf-8") as f:
-            json.dump(json_data, f, indent=2)
+            if args.minify_json:
+                json.dump(json_data, f, separators=(',', ':'))  # Minified JSON
+            else:
+                json.dump(json_data, f, indent=2)  # Pretty JSON
         
     except Exception as e:
         logging.error(f"Error generating BMS summary: {str(e)}")
@@ -1239,7 +1377,7 @@ def generate_bms_summary(excel_filename, json_filename, output_dir):
 def process_host(host, chrome_driver_path, timeout, verify_ssl, excel_filename, xml_filename, csv_filename, 
                 json_filename, worker_id, jitter, output_dir, progress_file=None):
     """Process a single host with its own Chrome driver."""
-    global running
+    global running, args
     driver = None
     
     # Check if we should abort due to shutdown
@@ -1253,8 +1391,12 @@ def process_host(host, chrome_driver_path, timeout, verify_ssl, excel_filename, 
             logging.debug(f"Worker {worker_id}: Applying jitter delay of {delay:.2f}s before processing {host}")
             time.sleep(delay)
         
-        # Set up driver for this thread
-        driver = setup_driver(chrome_driver_path, timeout)
+        # Set up driver for this thread with optional window size constraint
+        window_size = None
+        if args.screenshot_max_size > 0:
+            window_size = (args.screenshot_max_size, int(args.screenshot_max_size * 0.75))
+        
+        driver = setup_driver(chrome_driver_path, timeout, window_size)
         
         # Set up session for this thread
         session = create_requests_session(verify_ssl=verify_ssl)
@@ -1362,37 +1504,60 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler) # Kill signal
     
     parser = argparse.ArgumentParser(
-        description="WebScreenGrab - Optimized for processing ~1000 IPs at a time",
+        description="WebScreenGrab - Optimized for processing IPs with minimal storage requirements",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
+    
+    # Basic parameters
     parser.add_argument("ip_file", help="Path to the file containing IP addresses/hosts (one per line)")
     parser.add_argument("--local-chromedriver", required=True, help="Path to the local chromedriver executable")
+    parser.add_argument("--timeout", type=int, default=10, help="Timeout in seconds for page loads/HTTP requests")
+    parser.add_argument("--verify-ssl", action="store_true", help="Verify SSL certificates (disabled by default)")
+    parser.add_argument("--concurrent", type=int, default=4, help="Number of concurrent workers")
+    parser.add_argument("--jitter", type=float, default=0.5, help="Random delay (0-N seconds) between hosts")
+    
+    # Output options
+    parser.add_argument("--output-dir", default=".", help="Directory where all output files will be stored")
     parser.add_argument("--output-excel", default="results.xlsx", help="Filename for the Excel output")
     parser.add_argument("--output-xml", default="results.xml", help="Filename for the XML output")
     parser.add_argument("--output-csv", default="results.csv", help="Filename for the CSV output")
     parser.add_argument("--output-json", default="results.json", help="Filename for the JSON output")
-    parser.add_argument("--timeout", type=int, default=10, help="Timeout in seconds for page loads/HTTP requests")
-    parser.add_argument("--verify-ssl", action="store_true", help="Verify SSL certificates (disabled by default)")
-    parser.add_argument("--concurrent", type=int, default=4, help="Number of concurrent workers")
-    parser.add_argument("--cleanup-days", type=int, default=0, help="Days to keep screenshots (0 to disable cleanup)")
-    parser.add_argument("--generate-summary", action="store_true", help="Generate BMS summary report after scanning")
-    parser.add_argument("--jitter", type=float, default=0.5, help="Random delay (0-N seconds) between hosts")
     
     # Resume capability
     parser.add_argument("--resume", action="store_true", help="Enable resume capability (track processed IPs)")
     parser.add_argument("--progress-file", default="processed_ips.txt", help="File to save/load processed IPs")
     
-    # Output directory
-    parser.add_argument("--output-dir", default=".", help="Directory where all output files will be stored")
-    
-    # Summary-only mode options
+    # Summary generation options
+    parser.add_argument("--generate-summary", action="store_true", help="Generate BMS summary report after scanning")
     parser.add_argument("--summary-only", action="store_true", 
                        help="Only generate summary from existing Excel file(s) without scanning")
     parser.add_argument("--input-excel-files", nargs='+', 
                        help="List of Excel files to include in summary (only with --summary-only)")
     parser.add_argument("--input-excel-dir", 
                        help="Directory containing Excel files to process for summary (only with --summary-only)")
+    
+    # Screenshot options (file size optimization)
+    screenshot_group = parser.add_argument_group("Screenshot Options")
+    screenshot_group.add_argument("--no-screenshots", action="store_true", help="Disable screenshot capture completely")
+    screenshot_group.add_argument("--use-jpg-screenshots", action="store_true", help="Use JPG instead of PNG for smaller files")
+    screenshot_group.add_argument("--screenshot-quality", type=int, default=50, help="JPEG quality (1-100, lower = smaller files)")
+    screenshot_group.add_argument("--screenshot-max-size", type=int, default=800, help="Maximum screenshot dimension in pixels")
+    screenshot_group.add_argument("--screenshots-external", action="store_true", help="Store screenshots as external links, not embedded")
+    screenshot_group.add_argument("--cleanup-days", type=int, default=0, help="Days to keep screenshots (0 to disable cleanup)")
+    
+    # Content storage options (file size optimization)
+    content_group = parser.add_argument_group("Content Storage Options")
+    content_group.add_argument("--max-content-size", type=int, default=5000, 
+                              help="Maximum size in bytes of stored HTML body content (0 to disable)")
+    content_group.add_argument("--store-headers", choices=["all", "essential", "none"], default="essential",
+                              help="Which HTTP headers to store (all=full headers, essential=basic info, none=minimal)")
+    content_group.add_argument("--compression", action="store_true", 
+                              help="Enable data compression for large text fields")
+    content_group.add_argument("--store-minimal-json", action="store_true",
+                              help="Store minimal data in JSON output (smaller files)")
+    content_group.add_argument("--minify-json", action="store_true",
+                              help="Minify JSON output (remove whitespace)")
     
     args = parser.parse_args()
 
@@ -1434,6 +1599,22 @@ def main():
         
         logging.info("Summary generation complete, exiting.")
         sys.exit(0)
+        
+    # Log optimization settings
+    logging.info(f"File size optimization settings:")
+    logging.info(f"  - Screenshots: {'Disabled' if args.no_screenshots else 'Enabled'}")
+    if not args.no_screenshots:
+        logging.info(f"  - Screenshot format: {'JPG' if args.use_jpg_screenshots else 'PNG'}")
+        if args.use_jpg_screenshots:
+            logging.info(f"  - JPEG quality: {args.screenshot_quality}")
+        logging.info(f"  - Maximum screenshot size: {args.screenshot_max_size}px")
+        logging.info(f"  - Screenshot storage: {'External links' if args.screenshots_external else 'Embedded'}")
+    
+    logging.info(f"  - Content storage: {args.max_content_size} bytes max")
+    logging.info(f"  - Header storage level: {args.store_headers}")
+    logging.info(f"  - Compression: {'Enabled' if args.compression else 'Disabled'}")
+    logging.info(f"  - JSON storage: {'Minimal' if args.store_minimal_json else 'Full'}")
+    logging.info(f"  - JSON format: {'Minified' if args.minify_json else 'Pretty'}")
 
     logging.info(f"WebScreenGrab starting with parameters: concurrent={args.concurrent}, "
                 f"timeout={args.timeout}s, jitter={args.jitter}s, resume={args.resume}, "

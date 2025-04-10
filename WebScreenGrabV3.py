@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """
 webscreengrab.py - optimized for processing IPs with minimal storage requirements
-python webscreengrab4.py ips.txt --local-chromedriver "path/to/chromedriver.exe"  --max-content-size 500 --screenshot-quality 40 --use-jpg-screenshots --store-headers essential --store-minimal-json --minify-json1
+
 USAGE EXAMPLES:
 
 1. Normal scan with optimized file size:
@@ -16,14 +16,15 @@ USAGE EXAMPLES:
 4. Generate summary from multiple Excel files:
    python webscreengrab.py dummy.txt --local-chromedriver "c:\\path\\to\\chromedriver.exe" --summary-only --input-excel-files resultsA.xlsx resultsB.xlsx
    
-5. Generate summary from all Excel files in a directory:
-   python webscreengrab.py dummy.txt --local-chromedriver "c:\\path\\to\\chromedriver.exe" --summary-only --input-excel-dir /path/to/results_directory
+5. Generate summary from all Excel files in a directory with compression:
+   python webscreengrab.py dummy.txt --local-chromedriver "c:\\path\\to\\chromedriver.exe" --summary-only --input-excel-dir /path/to/results_directory --compress-output
 """
 
 import argparse
 import base64
 import csv
 import gc
+import glob
 import io
 import json
 import logging
@@ -35,6 +36,8 @@ import time
 import urllib3
 import xml.etree.ElementTree as ET
 import signal
+import zipfile
+import tarfile
 import zlib
 from collections import Counter
 from datetime import datetime, timedelta
@@ -136,10 +139,13 @@ def signal_handler(sig, frame):
     global running
     print("\nShutdown signal received. Cleaning up and saving progress...")
     running = False
-    # Allow time for current operations to complete and save
-    time.sleep(1)
-    print("Progress saved. Script is shutting down...")
-    sys.exit(0)
+    
+    # Give threads a chance to complete their current operation
+    time.sleep(2)
+    
+    print("Exiting gracefully now...")
+    # Force exit after giving threads time to notice the running flag change
+    os._exit(0)  # More forceful than sys.exit()
 
 
 def create_requests_session(retries=3, backoff_factor=0.3, verify_ssl=False):
@@ -178,6 +184,9 @@ def setup_driver(chrome_driver_path, timeout, window_size=None):
     
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
+    # Disable log messages
+    options.add_argument("--log-level=3")  # Suppress console logs
+    options.add_experimental_option('excludeSwitches', ['enable-logging'])  # Disable dev logging
     
     try:
         service = Service(executable_path=chrome_driver_path)
@@ -1029,6 +1038,47 @@ def process_excel_file(excel_path, file_basename=None):
         return None
 
 
+def compress_summary_outputs(output_dir, format="zip"):
+    """
+    Compress the summary outputs (txt, json) into an archive file.
+    
+    Args:
+        output_dir: Directory containing outputs
+        format: Either "zip" or "tar.gz"
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    summary_files = []
+    
+    # Collect summary files
+    summary_txt = os.path.join(output_dir, "bms_summary.txt")
+    if os.path.exists(summary_txt):
+        summary_files.append(summary_txt)
+    
+    # Add JSON output if it exists
+    json_files = glob.glob(os.path.join(output_dir, "*.json"))
+    summary_files.extend(json_files)
+    
+    if not summary_files:
+        logging.warning("No summary files found to compress")
+        return None
+    
+    if format == "zip":
+        archive_path = os.path.join(output_dir, f"bms_summary_{timestamp}.zip")
+        with zipfile.ZipFile(archive_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+            for file in summary_files:
+                arcname = os.path.basename(file)
+                zipf.write(file, arcname)
+    else:  # tar.gz
+        archive_path = os.path.join(output_dir, f"bms_summary_{timestamp}.tar.gz")
+        with tarfile.open(archive_path, "w:gz") as tar:
+            for file in summary_files:
+                arcname = os.path.basename(file)
+                tar.add(file, arcname=arcname)
+    
+    logging.info(f"Compressed summary outputs to {archive_path}")
+    return archive_path
+
+
 def generate_multi_file_summary(excel_files, json_filename, output_dir):
     """
     Generate a comprehensive summary from multiple Excel files.
@@ -1536,6 +1586,10 @@ def main():
                        help="List of Excel files to include in summary (only with --summary-only)")
     parser.add_argument("--input-excel-dir", 
                        help="Directory containing Excel files to process for summary (only with --summary-only)")
+    parser.add_argument("--compress-output", action="store_true", 
+                       help="Automatically compress summary outputs into an archive file")
+    parser.add_argument("--compress-format", choices=["zip", "tar.gz"], default="zip",
+                       help="Format to use for compression")
     
     # Screenshot options (file size optimization)
     screenshot_group = parser.add_argument_group("Screenshot Options")
@@ -1574,6 +1628,13 @@ def main():
             logging.StreamHandler()
         ]
     )
+    
+    # Silence SSL warnings and other noisy libraries
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    logging.getLogger('urllib3').setLevel(logging.ERROR)
+    logging.getLogger('selenium').setLevel(logging.WARNING)
+    logging.getLogger('connectionpool').setLevel(logging.ERROR)
+    logging.getLogger('requests').setLevel(logging.WARNING)
 
     # Check if we are in summary-only mode
     if args.summary_only:
@@ -1596,6 +1657,12 @@ def main():
             # Process single Excel file (traditional mode)
             logging.info(f"Processing single Excel file: {args.output_excel}")
             generate_bms_summary(args.output_excel, args.output_json, args.output_dir)
+        
+        # After summary generation, compress outputs if requested
+        if args.compress_output:
+            archive_file = compress_summary_outputs(args.output_dir, args.compress_format)
+            if archive_file:
+                logging.info(f"All summary data compressed to: {archive_file}")
         
         logging.info("Summary generation complete, exiting.")
         sys.exit(0)
@@ -1768,6 +1835,12 @@ def main():
     # Generate BMS summary if requested (even if no hosts were processed in this run)
     if args.generate_summary:
         generate_bms_summary(args.output_excel, args.output_json, args.output_dir)
+        
+        # Compress summary outputs if requested
+        if args.compress_output:
+            archive_file = compress_summary_outputs(args.output_dir, args.compress_format)
+            if archive_file:
+                logging.info(f"Summary data compressed to: {archive_file}")
 
     # Calculate and log final statistics
     total_duration = time.time() - start_time

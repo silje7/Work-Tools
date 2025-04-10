@@ -1,14 +1,40 @@
 #!/usr/bin/env python
 """
-webscreengrab.py - optimized for processing ~1000 ips at a time with headless mode
+webscreengrab.py - optimized for processing ~1000 IPs at a time with headless mode
 
-usage:
-    python webscreengrab3.py ips.txt --local-chromedriver "c:\\users\\v613867\\desktop\\projects\\tools\\chromedriver-win64\\chromedriver.exe"
-    [--output-excel results.xlsx] [--output-xml results.xml] [--output-csv results.csv] 
-    [--output-json results.json] [--timeout 10] [--concurrent 3]
-    [--cleanup-days 7] [--generate-summary] [--jitter 0.5] [--resume]
-    [--output-dir output_folder]
-...
+USAGE EXAMPLES:
+
+1. Normal scan with summary generation:
+   python webscreengrab.py ips.txt --local-chromedriver "c:\\path\\to\\chromedriver.exe" --generate-summary
+
+2. Generate summary from a single existing Excel file (without scanning):
+   python webscreengrab.py dummy.txt --local-chromedriver "c:\\path\\to\\chromedriver.exe" --summary-only --output-excel results.xlsx
+   
+3. Generate summary from multiple Excel files:
+   python webscreengrab.py dummy.txt --local-chromedriver "c:\\path\\to\\chromedriver.exe" --summary-only --input-excel-files resultsA.xlsx resultsB.xlsx
+   
+4. Generate summary from all Excel files in a directory:
+   python webscreengrab.py dummy.txt --local-chromedriver "c:\\path\\to\\chromedriver.exe" --summary-only --input-excel-dir /path/to/results_directory
+
+Command-line arguments:
+  ip_file              Path to the file containing IP addresses/hosts (one per line)
+  --local-chromedriver Path to the local chromedriver executable
+  --output-excel       Filename for the Excel output (default: results.xlsx)
+  --output-xml         Filename for the XML output (default: results.xml)
+  --output-csv         Filename for the CSV output (default: results.csv)
+  --output-json        Filename for the JSON output (default: results.json)
+  --timeout            Timeout in seconds for page loads/HTTP requests (default: 10)
+  --verify-ssl         Verify SSL certificates (disabled by default)
+  --concurrent         Number of concurrent workers (default: 4)
+  --cleanup-days       Days to keep screenshots, 0 to disable cleanup (default: 0)
+  --generate-summary   Generate BMS summary report after scanning
+  --jitter             Random delay between hosts in seconds (default: 0.5)
+  --resume             Enable resume capability (track processed IPs)
+  --progress-file      File to save/load processed IPs (default: processed_ips.txt)
+  --output-dir         Directory where output files will be stored (default: .)
+  --summary-only       Only generate summary from existing Excel file(s) without scanning
+  --input-excel-files  List of Excel files to include in summary (only with --summary-only)
+  --input-excel-dir    Directory containing Excel files to process (only with --summary-only)
 """
 
 import argparse
@@ -57,9 +83,6 @@ processed_lock = Lock()
 
 # Global set for tracking processed IPs
 processed_ips = set()
-
-
-chrome_driver_path = r"c:\users\v613867\desktop\projects\tools\chromedriver-win64\chromedriver.exe" 
 
 # Global columns for Excel/CSV
 EXCEL_COLUMNS = [
@@ -248,7 +271,7 @@ def test_protocol(driver, base_url, protocol, timeout, session, worker_id=0):
     Attempt to load the given host+protocol in Selenium, take a screenshot,
     and also do a requests.get for response metadata with progressive timeout handling.
     """
-    global running
+    global running, args
     
     # Early exit if shutting down
     if not running:
@@ -760,69 +783,457 @@ def save_processed_ip(progress_file, ip):
             logging.error(f"Error saving processed IP: {str(e)}")
 
 
-def generate_bms_summary(excel_filename, json_filename, output_dir):
-    """Generate summary of detected BMS systems."""
+def process_excel_file(excel_path, file_basename=None):
+    """
+    Process a single Excel file and return its aggregated data.
+    
+    Args:
+        excel_path: Full path to the Excel file
+        file_basename: Optional basename for display (defaults to filename)
+        
+    Returns:
+        Dictionary with aggregated data from all sheets in the file
+    """
     import pandas as pd
+    from collections import Counter
+    
+    if not os.path.exists(excel_path):
+        logging.error(f"Excel file not found: {excel_path}")
+        return None
+        
+    if file_basename is None:
+        file_basename = os.path.basename(excel_path)
     
     try:
-        # Load Excel data
-        excel_path = os.path.join(output_dir, excel_filename)
-        df = pd.read_excel(excel_path)
+        # Load Excel file
+        excel_file = pd.ExcelFile(excel_path)
+        sheet_names = excel_file.sheet_names
         
-        # Count BMS types
-        bms_counts = df['BMS Type'].value_counts()
+        logging.info(f"Processing {len(sheet_names)} sheets from {file_basename}")
         
-        # Generate summary
-        summary_filename = os.path.join(output_dir, "bms_summary.txt")
-        with open(summary_filename, "w", encoding="utf-8") as f:
-            f.write("BMS/BAS SYSTEM SUMMARY\n")
-            f.write("=====================\n\n")
-            f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-            f.write(f"Total hosts scanned: {len(df)}\n")
-            f.write(f"Hosts with HTTPS: {sum(df['HTTPS Works'] == 'True')}\n")
-            f.write(f"Hosts with HTTP only: {sum((df['HTTPS Works'] == 'False') & (df['HTTP Works'] == 'True'))}\n\n")
+        # Initialize aggregated data for this file
+        file_data = {
+            "file_path": excel_path,
+            "file_basename": file_basename,
+            "sheet_names": sheet_names,
+            "total_hosts": 0,
+            "total_https_hosts": 0,
+            "total_http_only_hosts": 0,
+            "bms_counts": Counter(),
+            "response_times": [],
+            "bms_entries": [],
+            "sheet_data": []
+        }
+        
+        # Process each sheet
+        for sheet_name in sheet_names:
+            df = pd.read_excel(excel_file, sheet_name=sheet_name)
+            logging.info(f"Processing sheet: {sheet_name} with {len(df)} entries")
             
-            f.write("BMS/BAS Systems Detected:\n")
-            for bms_type, count in bms_counts.items():
-                f.write(f"  - {bms_type}: {count} hosts\n")
+            # Skip sheet if it doesn't have the expected columns
+            required_columns = ['IP/Host', 'HTTPS Works', 'HTTP Works', 'BMS Type', 'Response Time (s)', 'Title (Chosen Protocol)']
+            if not all(col in df.columns for col in required_columns):
+                logging.warning(f"Sheet '{sheet_name}' in '{file_basename}' is missing required columns, skipping")
+                continue
             
-            # Calculate average response times
-            avg_response = df['Response Time (s)'].mean()
-            max_response = df['Response Time (s)'].max()
-            min_response = df['Response Time (s)'].min()
-            f.write(f"\nPerformance Statistics:\n")
-            f.write(f"  - Average response time: {avg_response:.2f} seconds\n")
-            f.write(f"  - Maximum response time: {max_response:.2f} seconds\n")
-            f.write(f"  - Minimum response time: {min_response:.2f} seconds\n")
+            # Count hosts
+            sheet_hosts = len(df)
+            sheet_https_hosts = sum(df['HTTPS Works'] == 'True')
+            sheet_http_only_hosts = sum((df['HTTPS Works'] == 'False') & (df['HTTP Works'] == 'True'))
             
-            # Add summary of BMS by address
-            f.write("\n\nDetailed BMS Listing:\n")
+            file_data["total_hosts"] += sheet_hosts
+            file_data["total_https_hosts"] += sheet_https_hosts
+            file_data["total_http_only_hosts"] += sheet_http_only_hosts
+            
+            # Aggregate BMS counts
+            sheet_bms_counts = df['BMS Type'].value_counts().to_dict()
+            for bms_type, count in sheet_bms_counts.items():
+                file_data["bms_counts"][bms_type] += count
+            
+            # Collect response times
+            file_data["response_times"].extend(df['Response Time (s)'].dropna().tolist())
+            
+            # Collect BMS entries for detailed listing
             for index, row in df.iterrows():
                 if row['BMS Type'] != 'Unknown':
-                    f.write(f"  - {row['IP/Host']}: {row['BMS Type']} - {row['Title (Chosen Protocol)']}\n")
+                    file_data["bms_entries"].append({
+                        'ip_host': row['IP/Host'],
+                        'bms_type': row['BMS Type'],
+                        'title': row['Title (Chosen Protocol)'],
+                        'sheet': sheet_name,
+                        'file': file_basename
+                    })
+            
+            # Store sheet summary data
+            sheet_data = {
+                "sheet_name": sheet_name,
+                "hosts": sheet_hosts,
+                "https_hosts": sheet_https_hosts,
+                "http_only_hosts": sheet_http_only_hosts
+            }
+            
+            if 'BMS Type' in df.columns:
+                sheet_data["bms_counts"] = df['BMS Type'].value_counts().to_dict()
+            
+            file_data["sheet_data"].append(sheet_data)
+        
+        # Calculate response time statistics if available
+        if file_data["response_times"]:
+            file_data["avg_response"] = sum(file_data["response_times"]) / len(file_data["response_times"])
+            file_data["max_response"] = max(file_data["response_times"])
+            file_data["min_response"] = min(file_data["response_times"])
+        else:
+            file_data["avg_response"] = file_data["max_response"] = file_data["min_response"] = 0
+            
+        if file_data["total_hosts"] == 0:
+            logging.warning(f"No valid data found in any sheet in '{file_basename}'")
+            
+        return file_data
+        
+    except Exception as e:
+        logging.error(f"Error processing Excel file '{file_basename}': {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
+        return None
+
+
+def generate_multi_file_summary(excel_files, json_filename, output_dir):
+    """
+    Generate a comprehensive summary from multiple Excel files.
+    
+    Args:
+        excel_files: List of paths to Excel files
+        json_filename: Name of the JSON file to update
+        output_dir: Output directory for summary files
+    """
+    from collections import Counter
+    import os.path
+    
+    # Process each Excel file
+    all_file_data = []
+    for excel_path in excel_files:
+        try:
+            # Handle relative vs. absolute paths
+            if not os.path.isabs(excel_path):
+                full_path = os.path.join(output_dir, excel_path)
+            else:
+                full_path = excel_path
+                
+            file_basename = os.path.basename(full_path)
+            file_data = process_excel_file(full_path, file_basename)
+            
+            if file_data and file_data["total_hosts"] > 0:
+                all_file_data.append(file_data)
+        except Exception as e:
+            logging.error(f"Error processing file {excel_path}: {str(e)}")
+    
+    if not all_file_data:
+        logging.error("No valid data found in any of the provided Excel files")
+        return
+    
+    # Aggregate data across all files
+    combined_data = {
+        "total_hosts": sum(f["total_hosts"] for f in all_file_data),
+        "total_https_hosts": sum(f["total_https_hosts"] for f in all_file_data),
+        "total_http_only_hosts": sum(f["total_http_only_hosts"] for f in all_file_data),
+        "combined_bms_counts": Counter(),
+        "all_response_times": [],
+        "files_analyzed": len(all_file_data),
+        "file_basenames": [f["file_basename"] for f in all_file_data],
+        "total_sheets": sum(len(f["sheet_names"]) for f in all_file_data)
+    }
+    
+    # Combine BMS counts and response times
+    for file_data in all_file_data:
+        for bms_type, count in file_data["bms_counts"].items():
+            combined_data["combined_bms_counts"][bms_type] += count
+        combined_data["all_response_times"].extend(file_data["response_times"])
+    
+    # Calculate aggregated response time statistics
+    if combined_data["all_response_times"]:
+        combined_data["avg_response"] = sum(combined_data["all_response_times"]) / len(combined_data["all_response_times"])
+        combined_data["max_response"] = max(combined_data["all_response_times"])
+        combined_data["min_response"] = min(combined_data["all_response_times"])
+    else:
+        combined_data["avg_response"] = combined_data["max_response"] = combined_data["min_response"] = 0
+    
+    # Generate summary file
+    summary_filename = os.path.join(output_dir, "bms_summary.txt")
+    with open(summary_filename, "w", encoding="utf-8") as f:
+        f.write("BMS/BAS SYSTEM SUMMARY (MULTI-FILE)\n")
+        f.write("=================================\n\n")
+        f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Files analyzed: {combined_data['files_analyzed']}\n")
+        f.write(f"Total sheets analyzed: {combined_data['total_sheets']}\n\n")
+        
+        # Overall statistics
+        f.write("OVERALL STATISTICS:\n")
+        f.write(f"Total hosts scanned: {combined_data['total_hosts']}\n")
+        total_hosts = combined_data['total_hosts']
+        if total_hosts > 0:
+            f.write(f"Hosts with HTTPS: {combined_data['total_https_hosts']} ({combined_data['total_https_hosts']/total_hosts*100:.1f}%)\n")
+            f.write(f"Hosts with HTTP only: {combined_data['total_http_only_hosts']} ({combined_data['total_http_only_hosts']/total_hosts*100:.1f}%)\n\n")
+        
+        # Per-file breakdown
+        f.write("PER-FILE BREAKDOWN:\n")
+        for file_data in all_file_data:
+            f.write(f"File: {file_data['file_basename']}\n")
+            f.write(f"  Total hosts: {file_data['total_hosts']}\n")
+            if file_data['total_hosts'] > 0:
+                f.write(f"  HTTPS hosts: {file_data['total_https_hosts']} ({file_data['total_https_hosts']/file_data['total_hosts']*100:.1f}%)\n")
+                f.write(f"  HTTP-only hosts: {file_data['total_http_only_hosts']} ({file_data['total_http_only_hosts']/file_data['total_hosts']*100:.1f}%)\n")
+                f.write(f"  Sheets: {len(file_data['sheet_names'])}\n")
+                
+                # Top 3 BMS types in this file
+                if file_data["bms_counts"]:
+                    f.write(f"  Top BMS types: ")
+                    for bms_type, count in Counter(file_data["bms_counts"]).most_common(3):
+                        f.write(f"{bms_type} ({count}), ")
+                f.write("\n\n")
+                
+                # Sheet breakdown for this file
+                f.write(f"  Sheet breakdown for {file_data['file_basename']}:\n")
+                for sheet_data in file_data["sheet_data"]:
+                    sheet_name = sheet_data["sheet_name"]
+                    hosts = sheet_data["hosts"]
+                    f.write(f"    Sheet: {sheet_name} - {hosts} hosts\n")
+                f.write("\n")
+        
+        # BMS systems detected across all files
+        f.write("BMS/BAS SYSTEMS DETECTED (ALL FILES):\n")
+        for bms_type, count in combined_data["combined_bms_counts"].most_common():
+            if total_hosts > 0:
+                f.write(f"  - {bms_type}: {count} hosts ({count/total_hosts*100:.1f}%)\n")
+            else:
+                f.write(f"  - {bms_type}: {count} hosts\n")
+        
+        # Performance statistics
+        f.write(f"\nPERFORMANCE STATISTICS:\n")
+        f.write(f"  - Average response time: {combined_data['avg_response']:.2f} seconds\n")
+        f.write(f"  - Maximum response time: {combined_data['max_response']:.2f} seconds\n")
+        f.write(f"  - Minimum response time: {combined_data['min_response']:.2f} seconds\n")
+        
+        # Detailed BMS listing (group by file for clarity)
+        f.write("\nDETAILED BMS LISTING BY FILE:\n")
+        for file_data in all_file_data:
+            if file_data["bms_entries"]:
+                f.write(f"\nFrom {file_data['file_basename']}:\n")
+                for entry in file_data["bms_entries"]:
+                    f.write(f"  - {entry['ip_host']} ({entry['sheet']}): {entry['bms_type']} - {entry['title']}\n")
+    
+    logging.info(f"Generated multi-file BMS summary: {summary_filename}")
+    
+    # Update JSON with summary data
+    json_path = os.path.join(output_dir, json_filename)
+    try:
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                json_data = json.load(f)
+        except (json.JSONDecodeError, FileNotFoundError):
+            json_data = {"generated": datetime.now().isoformat(), "results": []}
+        
+        # Create comprehensive summary section in JSON
+        json_data["multi_file_summary"] = {
+            "generated": datetime.now().isoformat(),
+            "total_hosts": combined_data["total_hosts"],
+            "total_https_hosts": combined_data["total_https_hosts"],
+            "total_http_only_hosts": combined_data["total_http_only_hosts"],
+            "avg_response_time": float(combined_data["avg_response"]),
+            "max_response_time": float(combined_data["max_response"]),
+            "min_response_time": float(combined_data["min_response"]),
+            "bms_counts": {k: int(v) for k, v in combined_data["combined_bms_counts"].items()},
+            "files_analyzed": combined_data["files_analyzed"],
+            "file_basenames": combined_data["file_basenames"],
+            "per_file_summary": []
+        }
+        
+        # Add per-file summary data
+        for file_data in all_file_data:
+            file_summary = {
+                "file_basename": file_data["file_basename"],
+                "total_hosts": file_data["total_hosts"],
+                "https_hosts": file_data["total_https_hosts"],
+                "http_only_hosts": file_data["total_http_only_hosts"],
+                "avg_response_time": float(file_data["avg_response"]),
+                "sheets": len(file_data["sheet_names"]),
+                "bms_counts": {k: int(v) for k, v in file_data["bms_counts"].items()},
+                "per_sheet_summary": []
+            }
+            
+            # Add per-sheet summary data for this file
+            for sheet_data in file_data["sheet_data"]:
+                sheet_summary = {
+                    "sheet_name": sheet_data["sheet_name"],
+                    "hosts": sheet_data["hosts"],
+                    "https_hosts": sheet_data["https_hosts"],
+                    "http_only_hosts": sheet_data["http_only_hosts"]
+                }
+                
+                if "bms_counts" in sheet_data:
+                    sheet_summary["bms_counts"] = {k: int(v) for k, v in sheet_data["bms_counts"].items()}
+                
+                file_summary["per_sheet_summary"].append(sheet_summary)
+            
+            json_data["multi_file_summary"]["per_file_summary"].append(file_summary)
+        
+        # Save the JSON file
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(json_data, f, indent=2)
+            
+    except Exception as e:
+        logging.error(f"Error updating JSON with multi-file summary: {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
+
+
+def process_excel_directory(directory, json_filename, output_dir):
+    """
+    Process all Excel files in a directory for summary generation.
+    
+    Args:
+        directory: Directory containing Excel files
+        json_filename: Name of the JSON file to update
+        output_dir: Output directory for summary files
+    """
+    if not os.path.isdir(directory):
+        logging.error(f"Directory not found: {directory}")
+        return
+    
+    # Find all Excel files in the directory
+    excel_files = []
+    for filename in os.listdir(directory):
+        if filename.endswith(('.xlsx', '.xls')) and os.path.isfile(os.path.join(directory, filename)):
+            excel_files.append(os.path.join(directory, filename))
+    
+    if not excel_files:
+        logging.error(f"No Excel files found in directory: {directory}")
+        return
+    
+    logging.info(f"Found {len(excel_files)} Excel files in {directory}")
+    generate_multi_file_summary(excel_files, json_filename, output_dir)
+
+
+def generate_bms_summary(excel_filename, json_filename, output_dir):
+    """Generate summary of detected BMS systems from all sheets in the Excel file."""
+    import pandas as pd
+    from collections import Counter
+    
+    try:
+        # Load Excel file
+        excel_path = os.path.join(output_dir, excel_filename)
+        
+        # Check if the file exists
+        if not os.path.exists(excel_path):
+            logging.error(f"Excel file not found: {excel_path}")
+            return
+            
+        # Process the single file using the multi-file framework
+        file_data = process_excel_file(excel_path)
+        if not file_data or file_data["total_hosts"] == 0:
+            logging.error("No valid data found in the Excel file")
+            return
+            
+        # Generate summary file
+        summary_filename = os.path.join(output_dir, "bms_summary.txt")
+        with open(summary_filename, "w", encoding="utf-8") as f:
+            f.write("BMS/BAS SYSTEM SUMMARY (ALL SHEETS)\n")
+            f.write("=================================\n\n")
+            f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"Sheets analyzed: {len(file_data['sheet_names'])}\n\n")
+            
+            # Overall statistics
+            f.write("OVERALL STATISTICS:\n")
+            f.write(f"Total hosts scanned: {file_data['total_hosts']}\n")
+            total_hosts = file_data['total_hosts']
+            if total_hosts > 0:
+                f.write(f"Hosts with HTTPS: {file_data['total_https_hosts']} ({file_data['total_https_hosts']/total_hosts*100:.1f}%)\n")
+                f.write(f"Hosts with HTTP only: {file_data['total_http_only_hosts']} ({file_data['total_http_only_hosts']/total_hosts*100:.1f}%)\n\n")
+            
+            # Per-sheet breakdown
+            f.write("PER-SHEET BREAKDOWN:\n")
+            for sheet_data in file_data["sheet_data"]:
+                sheet_name = sheet_data["sheet_name"]
+                hosts = sheet_data["hosts"]
+                https_hosts = sheet_data["https_hosts"]
+                http_only_hosts = sheet_data["http_only_hosts"]
+                
+                f.write(f"  Sheet: {sheet_name}\n")
+                f.write(f"    Hosts scanned: {hosts}\n")
+                f.write(f"    HTTPS hosts: {https_hosts}\n")
+                f.write(f"    HTTP-only hosts: {http_only_hosts}\n")
+                
+                # Top 3 BMS types in this sheet
+                if "bms_counts" in sheet_data and sheet_data["bms_counts"]:
+                    f.write(f"    Top BMS types: ")
+                    for bms_type, count in Counter(sheet_data["bms_counts"]).most_common(3):
+                        f.write(f"{bms_type} ({count}), ")
+                f.write("\n\n")
+            
+            # BMS systems detected across all sheets
+            f.write("BMS/BAS SYSTEMS DETECTED (ALL SHEETS):\n")
+            for bms_type, count in file_data["bms_counts"].most_common():
+                if total_hosts > 0:
+                    f.write(f"  - {bms_type}: {count} hosts ({count/total_hosts*100:.1f}%)\n")
+                else:
+                    f.write(f"  - {bms_type}: {count} hosts\n")
+            
+            # Performance statistics
+            f.write(f"\nPERFORMANCE STATISTICS:\n")
+            f.write(f"  - Average response time: {file_data['avg_response']:.2f} seconds\n")
+            f.write(f"  - Maximum response time: {file_data['max_response']:.2f} seconds\n")
+            f.write(f"  - Minimum response time: {file_data['min_response']:.2f} seconds\n")
+            
+            # Detailed BMS listing
+            f.write("\nDETAILED BMS LISTING:\n")
+            for entry in file_data["bms_entries"]:
+                f.write(f"  - {entry['ip_host']} ({entry['sheet']}): {entry['bms_type']} - {entry['title']}\n")
         
         logging.info(f"Generated BMS summary: {summary_filename}")
         
-        # Also update JSON with summary data
+        # Update JSON with summary data
         json_path = os.path.join(output_dir, json_filename)
-        with open(json_path, "r", encoding="utf-8") as f:
-            json_data = json.load(f)
+        try:
+            with open(json_path, "r", encoding="utf-8") as f:
+                json_data = json.load(f)
+        except (json.JSONDecodeError, FileNotFoundError):
+            json_data = {"generated": datetime.now().isoformat(), "results": []}
         
+        # Create comprehensive summary section in JSON
         json_data["summary"] = {
-            "total_hosts": len(df),
-            "https_hosts": int(sum(df['HTTPS Works'] == 'True')),
-            "http_only_hosts": int(sum((df['HTTPS Works'] == 'False') & (df['HTTP Works'] == 'True'))),
-            "avg_response_time": float(avg_response),
-            "max_response_time": float(max_response),
-            "min_response_time": float(min_response),
-            "bms_counts": {k: int(v) for k, v in bms_counts.items()}
+            "total_hosts": file_data["total_hosts"],
+            "https_hosts": file_data["total_https_hosts"],
+            "http_only_hosts": file_data["total_http_only_hosts"],
+            "avg_response_time": float(file_data["avg_response"]),
+            "max_response_time": float(file_data["max_response"]),
+            "min_response_time": float(file_data["min_response"]),
+            "bms_counts": {k: int(v) for k, v in file_data["bms_counts"].items()},
+            "sheets_analyzed": len(file_data["sheet_names"]),
+            "sheet_names": file_data["sheet_names"],
+            "per_sheet_summary": []
         }
         
+        # Add per-sheet summary data
+        for sheet_data in file_data["sheet_data"]:
+            sheet_summary = {
+                "sheet_name": sheet_data["sheet_name"],
+                "hosts": sheet_data["hosts"],
+                "https_hosts": sheet_data["https_hosts"],
+                "http_only_hosts": sheet_data["http_only_hosts"]
+            }
+            
+            if "bms_counts" in sheet_data:
+                sheet_summary["bms_counts"] = {k: int(v) for k, v in sheet_data["bms_counts"].items()}
+            
+            json_data["summary"]["per_sheet_summary"].append(sheet_summary)
+        
+        # Save the JSON file
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump(json_data, f, indent=2)
         
     except Exception as e:
         logging.error(f"Error generating BMS summary: {str(e)}")
+        import traceback
+        logging.error(traceback.format_exc())
 
 
 def process_host(host, chrome_driver_path, timeout, verify_ssl, excel_filename, xml_filename, csv_filename, 
@@ -951,7 +1362,9 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler) # Kill signal
     
     parser = argparse.ArgumentParser(
-        description="WebScreenGrab - Optimized for processing ~1000 IPs at a time"
+        description="WebScreenGrab - Optimized for processing ~1000 IPs at a time",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__
     )
     parser.add_argument("ip_file", help="Path to the file containing IP addresses/hosts (one per line)")
     parser.add_argument("--local-chromedriver", required=True, help="Path to the local chromedriver executable")
@@ -973,6 +1386,14 @@ def main():
     # Output directory
     parser.add_argument("--output-dir", default=".", help="Directory where all output files will be stored")
     
+    # Summary-only mode options
+    parser.add_argument("--summary-only", action="store_true", 
+                       help="Only generate summary from existing Excel file(s) without scanning")
+    parser.add_argument("--input-excel-files", nargs='+', 
+                       help="List of Excel files to include in summary (only with --summary-only)")
+    parser.add_argument("--input-excel-dir", 
+                       help="Directory containing Excel files to process for summary (only with --summary-only)")
+    
     args = parser.parse_args()
 
     # Create output directory
@@ -988,6 +1409,31 @@ def main():
             logging.StreamHandler()
         ]
     )
+
+    # Check if we are in summary-only mode
+    if args.summary_only:
+        if not args.generate_summary:
+            logging.warning("--summary-only flag specified without --generate-summary. Enabling summary generation.")
+            args.generate_summary = True
+        
+        logging.info("Running in summary-only mode to generate report from existing files.")
+        
+        # Determine which summary method to use based on provided arguments
+        if args.input_excel_dir:
+            # Process all Excel files in the specified directory
+            logging.info(f"Processing all Excel files in directory: {args.input_excel_dir}")
+            process_excel_directory(args.input_excel_dir, args.output_json, args.output_dir)
+        elif args.input_excel_files:
+            # Process the specific list of Excel files
+            logging.info(f"Processing {len(args.input_excel_files)} specified Excel files")
+            generate_multi_file_summary(args.input_excel_files, args.output_json, args.output_dir)
+        else:
+            # Process single Excel file (traditional mode)
+            logging.info(f"Processing single Excel file: {args.output_excel}")
+            generate_bms_summary(args.output_excel, args.output_json, args.output_dir)
+        
+        logging.info("Summary generation complete, exiting.")
+        sys.exit(0)
 
     logging.info(f"WebScreenGrab starting with parameters: concurrent={args.concurrent}, "
                 f"timeout={args.timeout}s, jitter={args.jitter}s, resume={args.resume}, "
@@ -1102,7 +1548,7 @@ def main():
             try:
                 # Apply jitter between hosts if enabled
                 if args.jitter > 0 and i > 0:  # Skip delay for first host
-                    delay = random.uniform(0, jitter)
+                    delay = random.uniform(0, args.jitter)
                     logging.debug(f"Applying jitter delay of {delay:.2f}s before processing {host}")
                     time.sleep(delay)
                 
@@ -1138,8 +1584,8 @@ def main():
     else:
         logging.info("No new hosts to process.")
 
-    # Generate BMS summary if requested
-    if args.generate_summary and processed_count > 0:
+    # Generate BMS summary if requested (even if no hosts were processed in this run)
+    if args.generate_summary:
         generate_bms_summary(args.output_excel, args.output_json, args.output_dir)
 
     # Calculate and log final statistics
